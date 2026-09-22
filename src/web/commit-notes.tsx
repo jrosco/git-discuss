@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
 import type { BranchChoice, CommitPage, Comment, Conversation, NoteCounts } from '../core/models.js';
 import { api, errorMessage } from './api.js';
-import { BranchOptions, ErrorNotice, SavedNotice, Thread } from './components.js';
+import { BranchOptions, ErrorNotice, SavedNotice, Thread, UpdatesNotice, useEditingGuard } from './components.js';
 import { activeCommentCount, commentBody } from '../core/changes.js';
 
-function ChangePicker({ initialCommit, conversation, syncVersion, busy, onLoad }: {
-  initialCommit: string; conversation: Conversation | null; syncVersion: number; busy: boolean; onLoad: (ref: string) => Promise<void>;
+function ChangePicker({ initialCommit, conversation, syncVersion, backgroundRevision, busy, onLoad }: {
+  initialCommit: string; conversation: Conversation | null; syncVersion: number; backgroundRevision: number; busy: boolean; onLoad: (ref: string) => Promise<void>;
 }) {
   const [branches, setBranches] = useState<BranchChoice[]>([]);
   const [branch, setBranch] = useState(initialCommit);
@@ -43,7 +43,7 @@ function ChangePicker({ initialCommit, conversation, syncVersion, busy, onLoad }
         Object.hasOwn(counts, item.commit) ? { ...item, noteCount: counts[item.commit] } : item) } : current);
     })().catch(error => { if (active) setCountError(errorMessage(error)); });
     return () => { active = false; };
-  }, [syncVersion, history?.tip, conversation]);
+  }, [syncVersion, backgroundRevision, history?.tip, conversation]);
   async function loadOlder() {
     if (!history || history.nextOffset === null) return;
     setBrowsing(true); setError('');
@@ -92,8 +92,8 @@ function ChangePicker({ initialCommit, conversation, syncVersion, busy, onLoad }
   </section>;
 }
 
-export function CommitNotesWorkspace({ initialCommit, syncVersion, onSaved, onShare }: {
-  initialCommit: string; syncVersion: number; onSaved: () => void; onShare: () => void;
+export function CommitNotesWorkspace({ initialCommit, syncVersion, backgroundRevision, onSaved, onShare }: {
+  initialCommit: string; syncVersion: number; backgroundRevision: number; onSaved: () => void; onShare: () => void;
 }) {
   const [conversation, setConversation] = useState<Conversation | null>(null);
   const selectedCommit = useRef(initialCommit);
@@ -102,11 +102,18 @@ export function CommitNotesWorkspace({ initialCommit, syncVersion, onSaved, onSh
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [busy, setBusy] = useState(true);
+  const [seenRevision, setSeenRevision] = useState(0);
+  const [deferredRefresh, setDeferredRefresh] = useState(false);
+  const editGuard = useEditingGuard();
   async function refresh() {
+    if (editGuard.editing) { setDeferredRefresh(true); return; }
+    const scroll = { left: window.scrollX, top: window.scrollY };
     setBusy(true); setError('');
     try {
       const next = await api<Conversation>(`conversation?commit=${encodeURIComponent(selectedCommit.current)}`);
       selectedCommit.current = next.commit; setConversation(next);
+      setSeenRevision(backgroundRevision); setDeferredRefresh(false);
+      requestAnimationFrame(() => window.scrollTo({ ...scroll, behavior: 'instant' }));
     } catch (error) { setError(errorMessage(error)); }
     finally { setBusy(false); }
   }
@@ -125,7 +132,8 @@ export function CommitNotesWorkspace({ initialCommit, syncVersion, onSaved, onSh
     finally { setBusy(false); }
   }
   return <>
-    <ChangePicker initialCommit={initialCommit} conversation={conversation} syncVersion={syncVersion} busy={busy} onLoad={load} />
+    <UpdatesNotice available={backgroundRevision > seenRevision || deferredRefresh} editing={editGuard.editing} busy={busy} onShow={() => void refresh()} />
+    <ChangePicker initialCommit={initialCommit} conversation={conversation} syncVersion={syncVersion} backgroundRevision={backgroundRevision} busy={busy} onLoad={load} />
     <ErrorNotice message={error} onRetry={() => void refresh()} />
     <SavedNotice message={notice} onShare={onShare} />
     {busy && <p className="muted" role="status">Loading or saving notes…</p>}
@@ -141,6 +149,7 @@ export function CommitNotesWorkspace({ initialCommit, syncVersion, onSaved, onSh
           <button type="button" className="text-button" disabled={busy} onClick={() => void refresh()}>Refresh notes</button></div>
         {conversation.comments.length === 0 && <div className="empty"><h3>No notes yet</h3><p>Capture a question or explain a decision about this saved change.</p></div>}
         {conversation.comments.filter(comment => !comment.replyTo).map(comment => <Thread key={comment.id} comment={comment} comments={conversation.comments} disabled={busy}
+          onEditingChange={editGuard.onEditingChange}
           onChange={async (item, mutation) => {
             setBusy(true);
             try {

@@ -127,3 +127,25 @@ export interface SyncResult {
   uploaded: number;
   unchanged: number;
 }
+
+export interface ReceiveResult {
+  remote: string;
+  updatedRefs: string[];
+}
+
+export const backgroundUpdatesInputSchema = z.object({
+  enabled: z.boolean(), remote: z.string().min(1).max(256),
+});
+
+export interface BackgroundUpdateStatus {
+  enabled: boolean;
+  remote: string | null;
+  running: boolean;
+  paused: boolean;
+  intervalSeconds: number;
+  revision: number;
+  lastCheckedAt: string | null;
+  lastSuccessAt: string | null;
+  nextCheckAt: string | null;
+  error: string | null;
+}

@@ -27,6 +27,7 @@ function App() {
   const [error, setError] = useState('');
   const [syncing, setSyncing] = useState(false);
   const [syncVersion, setSyncVersion] = useState(0);
+  const [backgroundRevision, setBackgroundRevision] = useState(0);
   const [localChanges, setLocalChanges] = useState(false);
   async function connect() {
     setError('');
@@ -74,7 +75,7 @@ function App() {
       {repository && <details><summary>Project location</summary><code>{repository.root}</code></details>}
     </div>
     <ErrorNotice message={error} onRetry={() => void connect()} />
-    {repository && <div id="sharing-area" tabIndex={-1}><SharingPanel busy={syncing} localChanges={localChanges} onBusy={setSyncing} onFinished={success => {
+    {repository && <div id="sharing-area" tabIndex={-1}><SharingPanel busy={syncing} localChanges={localChanges} onBusy={setSyncing} onBackgroundRevision={setBackgroundRevision} onFinished={success => {
       setSyncVersion(version => version + 1); if (success) setLocalChanges(false);
     }} /></div>}
     <div className="workspace-layout">
@@ -98,12 +99,12 @@ function App() {
         <section id="reviews-workspace" aria-labelledby="reviews-heading" hidden={workspace !== 'reviews'}>
           <header className="workspace-heading"><div className="eyebrow">DISCUSS WORK IN PROGRESS</div><h2 id="reviews-heading">Reviews</h2>
             <p>Choose changes, ask for feedback, and keep the conversation together as you update your code.</p></header>
-          {repository && <ReviewsWorkspace syncVersion={syncVersion} onSaved={() => setLocalChanges(true)} onShare={showSharing} />}
+          {repository && <ReviewsWorkspace syncVersion={syncVersion} backgroundRevision={backgroundRevision} onSaved={() => setLocalChanges(true)} onShare={showSharing} />}
         </section>
         <section id="notes-workspace" aria-labelledby="notes-heading" hidden={workspace !== 'notes'}>
           <header className="workspace-heading"><div className="eyebrow">CAPTURE CONTEXT FOR ONE CHANGE</div><h2 id="notes-heading">Change notes</h2>
             <p>Leave a question or explanation on a specific saved change. The note stays with that snapshot of the code.</p></header>
-          {repository && <CommitNotesWorkspace initialCommit={repository.initialCommit} syncVersion={syncVersion} onSaved={() => setLocalChanges(true)} onShare={showSharing} />}
+          {repository && <CommitNotesWorkspace initialCommit={repository.initialCommit} syncVersion={syncVersion} backgroundRevision={backgroundRevision} onSaved={() => setLocalChanges(true)} onShare={showSharing} />}
         </section>
       </fieldset>
     </div>

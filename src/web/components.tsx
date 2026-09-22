@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import type { BranchChoice, Comment, CommentMutation, Review } from '../core/models.js';
 import { commentBody, isDeleted, recordVersion } from '../core/changes.js';
 import { errorMessage } from './api.js';
@@ -78,9 +78,26 @@ export function CodeSource({ id, label, help, value, onChange, branches, savedOp
   </div>;
 }
 
-export function Thread({ comment, comments, onReply, onChange, versions, disabled = false }: {
+export function useEditingGuard() {
+  const [ids, setIds] = useState<string[]>([]);
+  const onEditingChange = useCallback((id: string, editing: boolean) => {
+    setIds(current => editing ? current.includes(id) ? current : [...current, id] : current.includes(id) ? current.filter(item => item !== id) : current);
+  }, []);
+  return { editing: ids.length > 0, onEditingChange };
+}
+
+export function UpdatesNotice({ available, editing, busy, onShow }: { available: boolean; editing: boolean; busy: boolean; onShow: () => void }) {
+  if (!available) return null;
+  return <div className="updates-notice">
+    <div><strong>New feedback available</strong><small>{editing ? 'Finish or cancel your edit before showing updates.' : 'Your draft and selected version will stay here.'}</small></div>
+    <button type="button" className="secondary-button" disabled={editing || busy} onClick={onShow}>Show updates</button>
+  </div>;
+}
+
+export function Thread({ comment, comments, onReply, onChange, onEditingChange, versions, disabled = false }: {
   comment: Comment; comments: Comment[]; onReply: (comment: Comment) => void;
   onChange?: (comment: Comment, mutation: CommentMutation) => Promise<void>;
+  onEditingChange?: (id: string, editing: boolean) => void;
   versions?: Review['revisions']; disabled?: boolean;
 }) {
   const version = versions?.findIndex(item => 'revisionId' in comment && item.id === comment.revisionId);
@@ -90,6 +107,10 @@ export function Thread({ comment, comments, onReply, onChange, versions, disable
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const deleted = isDeleted(comment);
+  useEffect(() => {
+    onEditingChange?.(comment.id, editing);
+    return () => onEditingChange?.(comment.id, false);
+  }, [comment.id, editing, onEditingChange]);
   async function change(mutation: CommentMutation) {
     if (!onChange) return;
     setSaving(true); setError('');
@@ -129,7 +150,7 @@ export function Thread({ comment, comments, onReply, onChange, versions, disable
       </>}
     </div>}
     {comments.filter(item => item.replyTo === comment.id).map(child =>
-      <div className="replies" key={child.id}><Thread comment={child} comments={comments} onReply={onReply} onChange={onChange} versions={versions} disabled={disabled} /></div>)}
+      <div className="replies" key={child.id}><Thread comment={child} comments={comments} onReply={onReply} onChange={onChange} onEditingChange={onEditingChange} versions={versions} disabled={disabled} /></div>)}
   </article>;
 }
 

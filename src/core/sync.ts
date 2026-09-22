@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { NOTES_REF, Repository } from '../git/repository.js';
-import { syncInputSchema, type Comment, type Review, type SyncResult } from './models.js';
+import { syncInputSchema, type Comment, type Review, type SyncResult, type ReceiveResult } from './models.js';
 import { canonical, mergeComments, mergeReviews, parseComments, parseReview } from './reconciliation.js';
 
 const REVIEWS = 'refs/git-discuss/reviews/';
@@ -23,11 +23,12 @@ export class Synchronization {
     if (ref !== NOTES_REF) z.uuid().parse(ref.slice(REVIEWS.length));
   }
 
-  private async readNotes(oid?: string): Promise<Map<string, Comment[]>> {
+  private async readNotes(oid?: string, signal?: AbortSignal): Promise<Map<string, Comment[]>> {
     const notes = new Map<string, Comment[]>();
     if (!oid) return notes;
     const tree = await this.repository.git('ls-tree', '-r', '--full-tree', oid);
     for (const line of tree ? tree.split('\n') : []) {
+      signal?.throwIfAborted();
       const match = /^100644 blob ([a-f0-9]+)\t([a-f0-9/]+)$/.exec(line);
       const commit = match?.[2].replaceAll('/', '');
       if (!match || !commit || !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(commit) || notes.has(commit)) {
@@ -38,9 +39,10 @@ export class Synchronization {
     return notes;
   }
 
-  private async snapshot(files: Map<string, string>, parents: string[]): Promise<string> {
+  private async snapshot(files: Map<string, string>, parents: string[], signal?: AbortSignal): Promise<string> {
     const entries: string[] = [];
     for (const [name, contents] of [...files].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)) {
+      signal?.throwIfAborted();
       const blob = await this.repository.gitInput(contents, 'hash-object', '-w', '--stdin');
       entries.push(`100644 blob ${blob}\t${name}\n`);
     }
@@ -49,15 +51,15 @@ export class Synchronization {
       ...[...new Set(parents)].flatMap(parent => ['-p', parent]));
   }
 
-  private async reconcile(ref: string, local?: string, remote?: string): Promise<string> {
+  private async reconcile(ref: string, local?: string, remote?: string, signal?: AbortSignal): Promise<string> {
     const parents = [local, remote].filter((oid): oid is string => Boolean(oid));
     const files = new Map<string, string>();
     const retained = new Set<string>();
     let sameLocal = false;
     let sameRemote = false;
     if (ref === NOTES_REF) {
-      const left = await this.readNotes(local);
-      const right = await this.readNotes(remote);
+      const left = await this.readNotes(local, signal);
+      const right = await this.readNotes(remote, signal);
       for (const commit of new Set([...left.keys(), ...right.keys()])) {
         files.set(commit, canonical(mergeComments(left.get(commit) ?? [], right.get(commit) ?? [])));
         retained.add(commit);
@@ -79,23 +81,81 @@ export class Synchronization {
     }
     // Legacy notes did not retain annotated code. New sync snapshots do, so another clone can read it.
     for (const commit of retained) {
+      signal?.throwIfAborted();
       try { await this.repository.resolve(commit); }
       catch { throw new Error(`Discussion references unavailable code ${commit}. Fetch its code branch, then retry sync.`); }
     }
     const reusable = async (candidate: string | undefined, same: boolean, other?: string) => {
       if (!candidate || !same || (other && !await this.repository.isAncestor(other, candidate))) return false;
-      for (const commit of retained) if (!await this.repository.isAncestor(commit, candidate)) return false;
+      for (const commit of retained) {
+        signal?.throwIfAborted();
+        if (!await this.repository.isAncestor(commit, candidate)) return false;
+      }
       return true;
     };
     if (await reusable(local, sameLocal, remote)) return local!;
     if (await reusable(remote, sameRemote, local)) return remote!;
     // Avoid redundant code parents when existing snapshot histories already retain them.
     for (const commit of retained) {
+      signal?.throwIfAborted();
       let reachable = false;
       for (const parent of parents) if (await this.repository.isAncestor(commit, parent)) { reachable = true; break; }
       if (!reachable) parents.push(commit);
     }
-    return this.snapshot(files, parents);
+    return this.snapshot(files, parents, signal);
+  }
+
+  async receive(input: { remote?: string } = {}, signal?: AbortSignal): Promise<ReceiveResult> {
+    const { remote } = syncInputSchema.parse(input);
+    signal?.throwIfAborted();
+    if (remote.startsWith('-') || !(await this.repository.remotes()).includes(remote)) {
+      throw new Error(`Remote "${remote}" is not configured. Refresh connections and choose a configured remote.`);
+    }
+    const staging = `refs/git-discuss/background/${randomUUID()}/`;
+    try {
+      const advertised = await this.repository.networkWithSignal(signal, 'ls-remote', '--refs', remote, NOTES_REF, `${REVIEWS}*`);
+      const names = advertised ? advertised.split('\n').map(line => line.split('\t')[1]) : [];
+      for (const ref of names) this.validateRef(ref);
+      const specs: string[] = [];
+      if (names.includes(NOTES_REF)) specs.push(`${NOTES_REF}:${staging}notes`);
+      if (names.some(ref => ref.startsWith(REVIEWS))) specs.push(`${REVIEWS}*:${staging}reviews/*`);
+      if (!specs.length) return { remote, updatedRefs: [] };
+      await this.repository.networkWithSignal(signal, 'fetch', '--atomic', '--no-tags', '--no-write-fetch-head', '--refmap=', remote, ...specs);
+      signal?.throwIfAborted();
+      const fetched = await this.refs(staging);
+      const local = await this.refs(NOTES_REF, REVIEWS);
+      const targets = new Map<string, string>();
+      const checked = new Map<string, string | undefined>();
+      // Prepare outside the application lock. A foreground writer can save throughout network/merge work.
+      for (const [temporaryRef, right] of fetched) {
+        signal?.throwIfAborted();
+        const ref = temporaryRef === `${staging}notes` ? NOTES_REF : `${REVIEWS}${temporaryRef.slice(`${staging}reviews/`.length)}`;
+        this.validateRef(ref);
+        const left = local.get(ref);
+        checked.set(ref, left);
+        // Different tips must still be validated, even when one is an ancestor: an external
+        // writer may have changed an immutable record rather than appending a supported edit.
+        if (left === right) continue;
+        const next = await this.reconcile(ref, left, right, signal);
+        if (next !== left) targets.set(ref, next);
+      }
+      signal?.throwIfAborted();
+      if (!targets.size) return { remote, updatedRefs: [] };
+      await this.repository.withWriteLock(async () => {
+        signal?.throwIfAborted();
+        const commands = [...checked].map(([ref, previous]) => {
+          const next = targets.get(ref);
+          return next ? `update ${ref} ${next} ${previous ?? '0'.repeat(next.length)}` : `verify ${ref} ${previous}`;
+        });
+        // If any local input changed while preparing, the whole transaction fails. The next check retries.
+        await this.repository.gitInput(`start\noption no-deref\n${commands.join('\n')}\nprepare\ncommit\n`, 'update-ref', '--stdin');
+      });
+      return { remote, updatedRefs: [...targets.keys()] };
+    } finally {
+      const staged = await this.refs(staging);
+      if (staged.size) await this.repository.gitInput(
+        [...staged].map(([ref, oid]) => `delete ${ref} ${oid}\n`).join(''), 'update-ref', '--stdin');
+    }
   }
 
   async sync(input: { remote?: string } = {}): Promise<SyncResult> {

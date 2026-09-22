@@ -78,6 +78,15 @@ details p { font-size: 13px; }
 .sharing-settings[open] { border-top: 1px solid var(--border); padding-top: 10px; margin-top: 10px; }
 .sharing-settings label { margin-top: 12px; }
 .sharing-settings p { color: var(--muted); }
+.automatic-updates-setting { border-top: 1px solid var(--border); margin-top: 16px; padding-top: 4px; }
+.checkbox-label { display: flex; align-items: center; gap: 8px; }
+.checkbox-label input { width: 16px; height: 16px; margin: 0; padding: 0; flex-shrink: 0; accent-color: var(--primary); }
+.background-status { min-height: 38px; padding-top: 12px; color: var(--muted); font-size: 12px; line-height: 1.6; }
+.background-error { font-size: 12px; color: var(--muted); }
+.background-error pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+.updates-notice { min-height: 68px; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 14px; margin: 0 0 16px; border: 1px solid var(--info-border); border-radius: 6px; background: var(--info-bg); font-size: 13px; }
+.updates-notice small { display: block; }
+.updates-notice button { flex-shrink: 0; }
 .workspace-layout { display: block; }
 .workspace-nav { display: flex; flex-wrap: wrap; align-items: start; gap: 4px; border-bottom: 1px solid var(--border); margin-bottom: 24px; }
 .workspace-nav > button { position: relative; padding: 12px 18px; border: 0; border-radius: 6px 6px 0 0; color: var(--fg); background: transparent; box-shadow: none; }
@@ -242,5 +251,7 @@ footer { text-align: center; margin-top: 40px; padding-top: 20px; border-top: 1p
   .review-timeline > .comment > .comment-header > .avatar { position: static; width: 26px; height: 26px; }
   .review-timeline::before { display: none; }
   .change-title { flex-wrap: wrap; gap: 6px; }
+  .updates-notice { min-height: 94px; }
+  .background-status { min-height: 52px; }
 }
 @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }

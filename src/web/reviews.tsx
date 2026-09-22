@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { BranchChoice, Comment, Review, RevisionDiff } from '../core/models.js';
 import { api, errorMessage } from './api.js';
-import { CodeSource, ErrorNotice, SavedNotice, Thread } from './components.js';
+import { CodeSource, ErrorNotice, SavedNotice, Thread, UpdatesNotice, useEditingGuard } from './components.js';
 import { commentBody, isDeleted, recordVersion, reviewTitle } from '../core/changes.js';
 
 function DiffViewer({ reviewId, revisionId }: { reviewId: string; revisionId: string }) {
@@ -74,8 +74,8 @@ function VersionForm({ review, onSave, onCancel }: {
   </form>;
 }
 
-export function ReviewsWorkspace({ syncVersion, onSaved, onShare }: {
-  syncVersion: number; onSaved: () => void; onShare: () => void;
+export function ReviewsWorkspace({ syncVersion, backgroundRevision, onSaved, onShare }: {
+  syncVersion: number; backgroundRevision: number; onSaved: () => void; onShare: () => void;
 }) {
   const [reviews, setReviews] = useState<Review[]>([]);
   const [review, setReview] = useState<Review | null>(null);
@@ -93,12 +93,18 @@ export function ReviewsWorkspace({ syncVersion, onSaved, onShare }: {
   const [editingTitle, setEditingTitle] = useState(false);
   const [titleDraft, setTitleDraft] = useState('');
   const [titleVersion, setTitleVersion] = useState('');
+  const [seenRevision, setSeenRevision] = useState(0);
+  const [deferredRefresh, setDeferredRefresh] = useState(false);
+  const editGuard = useEditingGuard();
+  const hasEdits = editGuard.editing || editingTitle || addingVersion || view === 'create';
 
   function remember(next: Review) {
     setReviews(current => [...current.filter(item => item.id !== next.id), next]);
     setReview(next); selectedId.current = next.id;
   }
   async function refresh() {
+    if (hasEdits) { setDeferredRefresh(true); return; }
+    const scroll = { left: window.scrollX, top: window.scrollY };
     setBusy(true); setError('');
     try {
       const items = await api<Review[]>('reviews');
@@ -106,6 +112,8 @@ export function ReviewsWorkspace({ syncVersion, onSaved, onShare }: {
       const current = items.find(item => item.id === selectedId.current);
       if (current) setReview(current);
       else if (selectedId.current) setReview(await api<Review>(`reviews/${selectedId.current}`));
+      setSeenRevision(backgroundRevision); setDeferredRefresh(false);
+      requestAnimationFrame(() => window.scrollTo({ ...scroll, behavior: 'instant' }));
     } catch (error) { setError(errorMessage(error)); }
     finally { setBusy(false); }
   }
@@ -132,6 +140,7 @@ export function ReviewsWorkspace({ syncVersion, onSaved, onShare }: {
   const latest = review?.revisions[review.revisions.length - 1];
 
   return <>
+    <UpdatesNotice available={backgroundRevision > seenRevision || deferredRefresh} editing={hasEdits} busy={busy} onShow={() => void refresh()} />
     <ErrorNotice message={error} onRetry={() => void refresh()} />
     <SavedNotice message={notice} onShare={onShare} />
     {view === 'list' && <>
@@ -236,6 +245,7 @@ export function ReviewsWorkspace({ syncVersion, onSaved, onShare }: {
           <div className="section-header"><h3>Discussion</h3><span className="muted">Feedback from all versions</span></div>
           {review.comments.length === 0 && <div className="empty"><h3>What should your teammates know?</h3><p>Ask a question, explain a decision, or suggest an improvement.</p></div>}
           {review.comments.filter(item => !item.replyTo).map(comment => <Thread key={comment.id} comment={comment} comments={review.comments} versions={review.revisions} disabled={busy}
+            onEditingChange={editGuard.onEditingChange}
             onChange={async (item, mutation) => {
               setBusy(true);
               try {

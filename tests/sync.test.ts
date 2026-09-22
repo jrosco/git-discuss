@@ -117,6 +117,8 @@ test('conflicting immutable records stop all local publication and clean tempora
   const before = await refs(b.repository);
   await assert.rejects(sb.sync(), /Sync conflict: record/);
   assert.equal(await refs(b.repository), before);
+  await assert.rejects(sb.receive(), /Sync conflict: record/);
+  assert.equal(await refs(b.repository), before);
   await assert.rejects(b.review(review.id), /does not exist/);
   assert.equal((await a.conversation(note.commit)).comments[0].body, 'Original record');
 });
@@ -226,4 +228,84 @@ test('concurrent edits converge, deleted comments preserve replies, and deleted 
   assert.equal(notes[1].replyTo, note.id);
   assert.equal(notes[1].body, 'Reply survives');
   assert.equal((await sb.sync()).uploaded, 0);
+});
+
+test('receive-only checks reconcile incoming work without uploading local feedback or changing code branches', async t => {
+  const { a, b, sa, sb, origin, refs } = await fixture(t);
+  const head = await b.repository.resolve('HEAD');
+  const note = await a.addComment({ commit: head, body: 'Shared note' });
+  await sa.sync(); await sb.receive();
+  await a.addComment({ commit: head, body: 'Team update', replyTo: note.id });
+  await b.addComment({ commit: head, body: 'Private local reply', replyTo: note.id });
+  const review = await a.createReview({ title: 'Incoming review', base: head, head });
+  await sa.sync();
+  const beforeRemote = (await execute('git', ['-C', origin, 'for-each-ref', '--format=%(refname) %(objectname)'])).stdout;
+  const network = b.repository.networkWithSignal.bind(b.repository);
+  b.repository.networkWithSignal = async (signal, ...args) => {
+    assert.notEqual(args[0], 'push');
+    return network(signal, ...args);
+  };
+  const result = await sb.receive();
+  assert.equal(result.updatedRefs.length, 2);
+  assert.equal((await b.conversation(head)).comments.length, 3);
+  assert.equal((await b.review(review.id)).title, 'Incoming review');
+  assert.equal((await a.conversation(head)).comments.length, 2);
+  assert.equal((await execute('git', ['-C', origin, 'for-each-ref', '--format=%(refname) %(objectname)'])).stdout, beforeRemote);
+  const before = await refs(b.repository);
+  assert.deepEqual((await sb.receive()).updatedRefs, []);
+  assert.equal(await refs(b.repository), before);
+  assert.equal(await b.repository.resolve('HEAD'), head);
+  assert.equal(await b.repository.git('status', '--porcelain'), '');
+  assert.equal(await b.repository.git('for-each-ref', 'refs/git-discuss/background/'), '');
+});
+
+test('receive-only publication rejects stale local inputs and retries without losing foreground saves', async t => {
+  const { a, b, sa, sb } = await fixture(t);
+  await a.addComment({ commit: 'HEAD', body: 'Shared starting note' });
+  await sa.sync(); await sb.receive();
+  await a.addComment({ commit: 'HEAD', body: 'Remote addition' });
+  await sa.sync();
+  const git = b.repository.git.bind(b.repository);
+  let raced = false;
+  b.repository.git = async (...args) => {
+    if (args[0] === 'cat-file' && args[1] === 'blob' && !raced) {
+      raced = true;
+      await b.addComment({ commit: 'HEAD', body: 'Foreground save during receive' });
+    }
+    return git(...args);
+  };
+  await assert.rejects(sb.receive(), /cannot lock ref|expected|is at/);
+  assert.deepEqual((await b.conversation('HEAD')).comments.map(item => item.body), ['Shared starting note', 'Foreground save during receive']);
+  await sb.receive();
+  assert.equal((await b.conversation('HEAD')).comments.length, 3);
+  assert.equal(await b.repository.git('for-each-ref', 'refs/git-discuss/background/'), '');
+});
+
+test('background update APIs are authenticated and receive data while leaving remote refs untouched', async t => {
+  const { a, b, sa, origin } = await fixture(t);
+  await a.addComment({ commit: 'HEAD', body: 'Background feedback' });
+  await sa.sync();
+  const before = (await execute('git', ['-C', origin, 'for-each-ref', '--format=%(refname) %(objectname)'])).stdout;
+  const { app, token } = await createServer(b);
+  t.after(() => app.close());
+  const address = await app.listen({ host: '127.0.0.1', port: 0 });
+  const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
+  assert.equal((await fetch(`${address}/api/background-updates`)).status, 401);
+  assert.equal((await fetch(`${address}/api/background-updates/check`, { method: 'POST' })).status, 401);
+  assert.equal((await fetch(`${address}/api/background-updates`, { method: 'POST', headers: { ...headers, Origin: 'https://example.test' }, body: '{}' })).status, 403);
+  assert.equal((await fetch(`${address}/api/background-updates`, { method: 'POST', headers, body: '{"enabled":true,"remote":"missing"}' })).status, 400);
+  assert.equal((await fetch(`${address}/api/background-updates`, { method: 'POST', headers, body: '{"enabled":true,"remote":"origin"}' })).status, 200);
+  const deadline = Date.now() + 15000;
+  let status: { revision: number; running: boolean; error: string | null };
+  do {
+    status = await (await fetch(`${address}/api/background-updates`, { headers })).json() as typeof status;
+    if (Date.now() > deadline) throw new Error(`Background receive timed out: ${status.error}`);
+    if (!status.revision) await new Promise(resolve => setTimeout(resolve, 50));
+  } while (!status.revision);
+  assert.equal(status.error, null);
+  assert.equal((await b.conversation('HEAD')).comments[0].body, 'Background feedback');
+  assert.equal((await execute('git', ['-C', origin, 'for-each-ref', '--format=%(refname) %(objectname)'])).stdout, before);
+  const disabled = await fetch(`${address}/api/background-updates`, { method: 'POST', headers, body: '{"enabled":false,"remote":"origin"}' });
+  assert.equal(disabled.status, 200);
+  assert.equal((await disabled.json() as { nextCheckAt: null }).nextCheckAt, null);
 });

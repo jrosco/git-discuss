@@ -48,6 +48,7 @@ If Git reports that `discuss` is not a command, run `npm.cmd link` from this pro
 - Web editing of review titles, comments, and replies; syncable deletion with retained history
 - Read-only unified diffs of retained review revisions in the browser
 - One-command / one-click sync of reviews and commit notes with a configured Git remote
+- Optional receive-only background checks with draft-safe update notifications
 - Add-only reconciliation of concurrent comments and revisions, with atomic publication
 - Commit selection, threaded plain-text comments, replies, refresh, and error handling
 - Git author identity, UTC timestamps, UUID comment IDs, and schema validation
@@ -130,7 +131,7 @@ Diffs are served through the authenticated `GET /api/reviews/:id/revisions/:revi
 - Deleting a comment asks for confirmation, replaces its text with **This comment was deleted**, and keeps replies in place. Replies can be edited or deleted independently.
 - **Delete review** asks for confirmation and removes the review from the list, including access to its discussion through normal navigation. Its retained deletion record is shared with the team on the next **Share & get updates**, so an older copy cannot bring it back.
 
-Changes save locally first and record the current Git author and timestamp. The local launch session can manage the repository's discussions; Git author metadata is not an ownership permission check. Saves include the version of the item that was opened, so a stale editor cannot silently overwrite an edit that has already arrived locally. If this check fails, the inline draft stays available: copy it if needed, refresh the discussion, cancel, and reopen Edit using the current text.
+Changes save locally first and record the current Git author and timestamp. The local launch session can manage the repository's discussions; Git author metadata is not an ownership permission check. Saves include the version of the item that was opened, so a stale editor cannot silently overwrite an edit that has already arrived locally. If this check fails, the inline draft stays available: copy it if needed, cancel the edit, refresh the discussion, and reopen Edit using the current text.
 
 Deletion is a retained marker, not secure erasure. Original text, edit history, replies, review revisions, and referenced code remain in Git. There is no restore/undelete action yet. Draft feedback on an externally deleted review is shown for copying when that deletion is received.
 
@@ -150,7 +151,7 @@ The existing `comment` / `show` commands and browser **Change notes** workspace 
 
 In **Change notes**, **Where should we look?** lists local branches, last-downloaded team branches, and **My current saved code** (`HEAD`, including detached HEAD). The list leads with each change's description and author, with dates and short IDs as secondary details. Click a change to open its notes directly—there is no separate load step. The open change is highlighted. **Have a specific commit ID or branch?** exposes a manual input for Git users.
 
-Each saved change shows its note count, including replies and excluding deleted comments. Counts update when you save or delete a note, refresh, or share updates, without resetting the chosen branch or older loaded pages. Review discussions are separate and are not included in these counts. If a stored note cannot be read, its count is shown as **Notes unavailable** rather than zero.
+Each saved change shows its note count, including replies and excluding deleted comments. Counts update when you save or delete a note, refresh, share updates, or receive background updates, without resetting the chosen branch or older loaded pages. Review discussions are separate and are not included in these counts. If a stored note cannot be read, its count is shown as **Notes unavailable** rather than zero.
 
 The picker loads 50 commits at a time. **Show older changes** continues from the same resolved tip, while **Refresh list** reloads branch choices and the selected branch's latest history. Remote-tracking branches reflect the last Git fetch; browsing does not fetch or check out branches. Opening a different change asks before discarding an unsaved note. Only ancestors of the selected ref are listed, so unrelated Git notes and review metadata histories are excluded.
 
@@ -169,11 +170,27 @@ git discuss sync --json
 
 In the browser, click **Share & get updates** in **Share with your team**. The default connection is `origin`, or the first configured remote if `origin` is absent. Change it under **Sharing settings & help** → **Team repository**. That section explains what a Git remote is and offers setup guidance if no remote is configured.
 
-The workspaces refresh after the operation while preserving drafts, the loaded commit, and the selected review version. Plain-language results lead with whether feedback was exchanged; **Exchange details** contains the ref counts. These describe storage refs downloaded, reconciled, uploaded, or unchanged—not individual comments. Posting still saves locally; sharing is an explicit action. The new-changes indicator tracks successful saves made in the current browser session, not a full repository-wide pending-sync audit. Draft text is never included in sharing.
+The workspaces refresh after the operation while preserving new-comment drafts, the loaded commit, and the selected review version. When an inline comment edit, title edit, or version form is open, display refresh is deferred until you finish or cancel it and choose **Show updates**. Plain-language results lead with whether feedback was exchanged; **Exchange details** contains the ref counts. These describe storage refs downloaded, reconciled, uploaded, or unchanged—not individual comments. Posting still saves locally; sharing is an explicit action. The new-changes indicator tracks successful saves made in the current browser session, not a full repository-wide pending-sync audit. Draft text is never included in sharing.
 
 Errors show a plain-language explanation with the original error available under **Technical details**. Setup commands and advanced Git IDs remain available without being required for everyday navigation.
 
 For a new clone, run `git discuss sync` to download discussions that normal clone does not include. After posting comments or retaining revisions, sync again to share them. Your teammates do the same. Existing Git credentials are used; there is no application account or separate review service.
+
+### Automatic background updates
+
+In **Sharing settings & help**, select your team repository and enable **Check for team updates automatically**. Checks start immediately, then run once per minute after the preceding check finishes. **Check now** runs a receive-only check sooner. Checks never overlap.
+
+The local server fetches discussion refs and reconciles incoming notes, reviews, edits, and deletions into local storage. This operation **never pushes**, even when you have unpublished local feedback. It does not change code branches, working files, or remote-tracking code branches. **Share & get updates** remains the explicit upload action.
+
+The browser checks the server's lightweight update status every five seconds. New local discussion data produces a **New feedback available → Show updates** notice. The active discussion and review list stay as loaded until you choose to show updates; commit note counts can refresh quietly. Your draft, selected commit/version, and expanded thread details stay in place. The notice only occupies space when updates are available; no blank placeholder is reserved. Inline edit/title/version forms defer refresh until finished or canceled, including when another user edits or deletes the same content. A deleted review still offers its unsaved new-comment draft for copying when you apply the update.
+
+Network and reconciliation failures appear as a quiet **Updates paused — will retry** status, with optional details. Retries back off to a maximum of five minutes; you can also choose **Check now**. A conflict leaves local discussion refs unchanged. New comments can still be drafted, and foreground saves/sharing pause or cancel the server's current background check before writing.
+
+Background fetching and reconciliation run outside the application write lock. Publication uses a short locked atomic compare-and-swap transaction. If a CLI or another application instance changes a discussion while a background check is preparing, publication is rejected and a later check starts from the newer local data. Temporary receive refs under `refs/git-discuss/background/*` are cleaned up after handled success/failure.
+
+The setting is **off by default**, shared by browser tabs connected to this server, and lasts for the current server session. Closing a browser tab does not stop an enabled server-side worker. Disable the setting to stop it; stopping `git discuss serve` cancels active background network requests and clears its timer. Restarting the server starts with automatic checks off. This is a local-server feature, not an operating-system background service.
+
+Authenticated API endpoints: `GET /api/background-updates` for status, `POST /api/background-updates` with `{ "enabled": true, "remote": "origin" }` to configure, and `POST /api/background-updates/check` to request an immediate check while enabled. These endpoints never invoke the push-capable sync operation.
 
 ### Setup and scope
 
@@ -185,7 +202,7 @@ For a new clone, run `git discuss sync` to download discussions that normal clon
 
 ### Reconciliation and failure handling
 
-Sync holds the application write lock, fetches remote discussion refs into a unique temporary namespace, and validates every snapshot before updating local discussion refs. It combines immutable comment/revision records and their append-only change histories by ID. Identical records are deduplicated, and additions from both developers are retained. Existing sequence constraints preserve parent-before-reply and revision history order; concurrent records are ordered deterministically by timestamp and UUID. Concurrent review revisions are both retained, not rebased or collapsed into one code change. Reviewers should explicitly select which revision they intend to discuss.
+Explicit Sync holds the application write lock, fetches remote discussion refs into a unique temporary namespace, and validates every snapshot before updating local discussion refs. Background receive uses the shorter publication-only lock described above. Both combine immutable comment/revision records and their append-only change histories by ID. Identical records are deduplicated, and additions from both developers are retained. Existing sequence constraints preserve parent-before-reply and revision history order; concurrent records are ordered deterministically by timestamp and UUID. Concurrent review revisions are both retained, not rebased or collapsed into one code change. Reviewers should explicitly select which revision they intend to discuss.
 
 Concurrent edits to the same comment or review title are both retained in its history; the final edit in the deterministic merged order is displayed. This is a consistent ordering, not a guarantee that unsynchronized clocks identify the actual last human edit. Deletion takes precedence over edits regardless of their order. A review deleted while a teammate adds feedback stays deleted, with that feedback retained in its stored history.
 

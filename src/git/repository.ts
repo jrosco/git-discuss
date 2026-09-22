@@ -39,9 +39,13 @@ export class Repository {
   }
 
   async network(...args: string[]): Promise<string> {
+    return this.networkWithSignal(undefined, ...args);
+  }
+
+  async networkWithSignal(signal: AbortSignal | undefined, ...args: string[]): Promise<string> {
     try {
       const { stdout } = await execute('git', ['-C', this.root, ...args], {
-        encoding: 'utf8', maxBuffer: 16 * 1024 * 1024, timeout: 120000,
+        encoding: 'utf8', maxBuffer: 16 * 1024 * 1024, timeout: 120000, signal,
         env: { ...process.env, GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'never' },
       });
       return stdout.trim();

@@ -5,12 +5,17 @@ import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
 import { Reviews } from '../core/reviews.js';
 import { Synchronization } from '../core/sync.js';
+import { BackgroundUpdates } from './background-updates.js';
+import { backgroundUpdatesInputSchema } from '../core/models.js';
 import { commentMutationSchema, reviewMutationSchema, noteCountsInputSchema } from '../core/models.js';
 import { addCommentSchema, createReviewSchema, revisionInputSchema, reviewCommentInputSchema, identifierInputSchema, commitListInputSchema, syncInputSchema } from '../core/models.js';
 
-export async function createServer(reviews: Reviews, initialCommit = 'HEAD') {
+export async function createServer(reviews: Reviews, initialCommit = 'HEAD', options: { backgroundIntervalMs?: number } = {}) {
   const app = Fastify({ bodyLimit: 128 * 1024 });
   const token = randomBytes(32).toString('hex');
+  const synchronization = new Synchronization(reviews.repository);
+  const background = new BackgroundUpdates(synchronization, options.backgroundIntervalMs);
+  app.addHook('onClose', async () => { await background.close(); });
 
   app.addHook('onRequest', async (request, reply) => {
     const address = app.server.address();
@@ -39,41 +44,56 @@ export async function createServer(reviews: Reviews, initialCommit = 'HEAD') {
     currentBranch: await reviews.repository.git('branch', '--show-current') || null,
   }));
   app.get('/api/remotes', async () => reviews.repository.remotes());
-  app.post('/api/sync', async request => new Synchronization(reviews.repository).sync(syncInputSchema.parse(request.body)));
+  app.post('/api/sync', async request => {
+    const input = syncInputSchema.parse(request.body);
+    return background.withForeground(() => synchronization.sync(input));
+  });
+  app.get('/api/background-updates', async () => background.status());
+  app.post('/api/background-updates', async request => background.configure(backgroundUpdatesInputSchema.parse(request.body)));
+  app.post('/api/background-updates/check', async () => background.checkNow());
   app.get('/api/branches', async () => reviews.repository.branches());
   app.get('/api/commits', async request => reviews.repository.commits(commitListInputSchema.parse(request.query)));
   app.post('/api/note-counts', async request => reviews.repository.noteCounts(noteCountsInputSchema.parse(request.body).commits));
   const reviewId = (params: unknown) => z.object({ id: identifierInputSchema }).parse(params).id;
   app.get('/api/reviews', async () => reviews.listReviews());
   app.post('/api/reviews', async (request, reply) => {
-    return reply.code(201).send(await reviews.createReview(createReviewSchema.parse(request.body)));
+    const input = createReviewSchema.parse(request.body);
+    return reply.code(201).send(await background.withForeground(() => reviews.createReview(input)));
   });
   app.get('/api/reviews/:id', async request => reviews.review(reviewId(request.params)));
-  app.post('/api/reviews/:id/change', async request => reviews.changeReview(reviewId(request.params), reviewMutationSchema.parse(request.body)));
+  app.post('/api/reviews/:id/change', async request => {
+    const id = reviewId(request.params); const input = reviewMutationSchema.parse(request.body);
+    return background.withForeground(() => reviews.changeReview(id, input));
+  });
   app.post('/api/reviews/:id/comments/:commentId/change', async request => {
     const { id, commentId } = z.object({ id: identifierInputSchema, commentId: identifierInputSchema }).parse(request.params);
-    return reviews.changeReviewComment(id, commentId, commentMutationSchema.parse(request.body));
+    const input = commentMutationSchema.parse(request.body);
+    return background.withForeground(() => reviews.changeReviewComment(id, commentId, input));
   });
   app.post('/api/commits/:commit/comments/:commentId/change', async request => {
     const { commit, commentId } = z.object({ commit: z.string().min(1).max(256), commentId: identifierInputSchema }).parse(request.params);
-    return reviews.changeCommitComment(commit, commentId, commentMutationSchema.parse(request.body));
+    const input = commentMutationSchema.parse(request.body);
+    return background.withForeground(() => reviews.changeCommitComment(commit, commentId, input));
   });
   app.get('/api/reviews/:id/revisions/:revisionId/diff', async request => {
     const params = z.object({ id: identifierInputSchema, revisionId: identifierInputSchema }).parse(request.params);
     return reviews.revisionDiff(params.id, params.revisionId);
   });
   app.post('/api/reviews/:id/revisions', async (request, reply) => {
-    return reply.code(201).send(await reviews.addRevision(reviewId(request.params), revisionInputSchema.parse(request.body)));
+    const id = reviewId(request.params); const input = revisionInputSchema.parse(request.body);
+    return reply.code(201).send(await background.withForeground(() => reviews.addRevision(id, input)));
   });
   app.post('/api/reviews/:id/comments', async (request, reply) => {
-    return reply.code(201).send(await reviews.addReviewComment(reviewId(request.params), reviewCommentInputSchema.parse(request.body)));
+    const id = reviewId(request.params); const input = reviewCommentInputSchema.parse(request.body);
+    return reply.code(201).send(await background.withForeground(() => reviews.addReviewComment(id, input)));
   });
   app.get('/api/conversation', async request => {
     const { commit } = z.object({ commit: z.string().min(1).max(256) }).parse(request.query);
     return reviews.conversation(commit);
   });
   app.post('/api/comments', async (request, reply) => {
-    const comment = await reviews.addComment(addCommentSchema.parse(request.body));
+    const input = addCommentSchema.parse(request.body);
+    const comment = await background.withForeground(() => reviews.addComment(input));
     return reply.code(201).send(comment);
   });
   await app.register(staticFiles, { root: fileURLToPath(new URL('../web/', import.meta.url)) });
