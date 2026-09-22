@@ -6,6 +6,8 @@ import { ReviewsWorkspace } from './reviews.js';
 import { CommitNotesWorkspace } from './commit-notes.js';
 import { SharingPanel } from './sharing.js';
 import './styles.css';
+import type { SyncResult } from '../core/models.js';
+import type { ComposerSharing } from './submission.js';
 
 type Theme = 'light' | 'dark';
 type RepositoryInfo = { root: string; initialCommit: string; currentBranch: string | null };
@@ -29,6 +31,17 @@ function App() {
   const [syncVersion, setSyncVersion] = useState(0);
   const [backgroundRevision, setBackgroundRevision] = useState(0);
   const [localChanges, setLocalChanges] = useState(false);
+  const [sharingRemote, setSharingRemote] = useState('');
+  const [shareSuccessVersion, setShareSuccessVersion] = useState(0);
+  const [immediateShareResult, setImmediateShareResult] = useState<SyncResult | null>(null);
+  const composerSharing: ComposerSharing = {
+    remote: sharingRemote, successVersion: shareSuccessVersion,
+    onSharing: active => { setSyncing(active); if (active) setImmediateShareResult(null); },
+    onShared: result => {
+      setSyncVersion(version => version + 1);
+      if (result) { setLocalChanges(false); setShareSuccessVersion(version => version + 1); setImmediateShareResult(result); }
+    },
+  };
   async function connect() {
     setError('');
     try { setRepository(await api<RepositoryInfo>('repository')); }
@@ -75,8 +88,9 @@ function App() {
       {repository && <details><summary>Project location</summary><code>{repository.root}</code></details>}
     </div>
     <ErrorNotice message={error} onRetry={() => void connect()} />
-    {repository && <div id="sharing-area" tabIndex={-1}><SharingPanel busy={syncing} localChanges={localChanges} onBusy={setSyncing} onBackgroundRevision={setBackgroundRevision} onFinished={success => {
-      setSyncVersion(version => version + 1); if (success) setLocalChanges(false);
+    {repository && <div id="sharing-area" tabIndex={-1}><SharingPanel busy={syncing} localChanges={localChanges} onBusy={setSyncing} onBackgroundRevision={setBackgroundRevision}
+      onRemoteChange={setSharingRemote} externalResult={immediateShareResult} onFinished={success => {
+      setSyncVersion(version => version + 1); if (success) { setLocalChanges(false); setShareSuccessVersion(version => version + 1); }
     }} /></div>}
     <div className="workspace-layout">
       <nav className="workspace-nav" aria-label="Discussion workspaces">
@@ -99,12 +113,12 @@ function App() {
         <section id="reviews-workspace" aria-labelledby="reviews-heading" hidden={workspace !== 'reviews'}>
           <header className="workspace-heading"><div className="eyebrow">DISCUSS WORK IN PROGRESS</div><h2 id="reviews-heading">Reviews</h2>
             <p>Choose changes, ask for feedback, and keep the conversation together as you update your code.</p></header>
-          {repository && <ReviewsWorkspace syncVersion={syncVersion} backgroundRevision={backgroundRevision} onSaved={() => setLocalChanges(true)} onShare={showSharing} />}
+          {repository && <ReviewsWorkspace syncVersion={syncVersion} backgroundRevision={backgroundRevision} sharing={composerSharing} onSaved={() => setLocalChanges(true)} onShare={showSharing} />}
         </section>
         <section id="notes-workspace" aria-labelledby="notes-heading" hidden={workspace !== 'notes'}>
           <header className="workspace-heading"><div className="eyebrow">CAPTURE CONTEXT FOR ONE CHANGE</div><h2 id="notes-heading">Change notes</h2>
             <p>Leave a question or explanation on a specific saved change. The note stays with that snapshot of the code.</p></header>
-          {repository && <CommitNotesWorkspace initialCommit={repository.initialCommit} syncVersion={syncVersion} backgroundRevision={backgroundRevision} onSaved={() => setLocalChanges(true)} onShare={showSharing} />}
+          {repository && <CommitNotesWorkspace initialCommit={repository.initialCommit} syncVersion={syncVersion} backgroundRevision={backgroundRevision} sharing={composerSharing} onSaved={() => setLocalChanges(true)} onShare={showSharing} />}
         </section>
       </fieldset>
     </div>

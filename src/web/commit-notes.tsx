@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
-import type { BranchChoice, CommitPage, Comment, Conversation, NoteCounts } from '../core/models.js';
+import type { BranchChoice, CommitPage, Comment, Conversation, NoteCounts, SyncResult } from '../core/models.js';
 import { api, errorMessage } from './api.js';
-import { BranchOptions, ErrorNotice, SavedNotice, Thread, UpdatesNotice, useEditingGuard } from './components.js';
+import { BranchOptions, CommentSubmitActions, ErrorNotice, SavedButUnshared, SavedNotice, Thread, UpdatesNotice, useEditingGuard } from './components.js';
+import { submitFeedback, type ComposerSharing } from './submission.js';
 import { activeCommentCount, commentBody } from '../core/changes.js';
 
 function ChangePicker({ initialCommit, conversation, syncVersion, backgroundRevision, busy, onLoad }: {
@@ -92,8 +93,8 @@ function ChangePicker({ initialCommit, conversation, syncVersion, backgroundRevi
   </section>;
 }
 
-export function CommitNotesWorkspace({ initialCommit, syncVersion, backgroundRevision, onSaved, onShare }: {
-  initialCommit: string; syncVersion: number; backgroundRevision: number; onSaved: () => void; onShare: () => void;
+export function CommitNotesWorkspace({ initialCommit, syncVersion, backgroundRevision, sharing, onSaved, onShare }: {
+  initialCommit: string; syncVersion: number; backgroundRevision: number; sharing: ComposerSharing; onSaved: () => void; onShare: () => void;
 }) {
   const [conversation, setConversation] = useState<Conversation | null>(null);
   const selectedCommit = useRef(initialCommit);
@@ -105,6 +106,29 @@ export function CommitNotesWorkspace({ initialCommit, syncVersion, backgroundRev
   const [seenRevision, setSeenRevision] = useState(0);
   const [deferredRefresh, setDeferredRefresh] = useState(false);
   const editGuard = useEditingGuard();
+  const [sharingNow, setSharingNow] = useState(false);
+  const [shareError, setShareError] = useState('');
+  useEffect(() => { setShareError(''); }, [sharing.successVersion]);
+
+  async function submitComment(shareNow: boolean) {
+    if (!conversation || busy || (shareNow && !sharing.remote)) return;
+    const remote = sharing.remote;
+    setBusy(true); setError(''); setNotice(''); setShareError(''); setSharingNow(shareNow);
+    if (shareNow) sharing.onSharing(true);
+    try {
+      const result = await submitFeedback(
+        () => api<Comment>('comments', { commit: conversation.commit, body, replyTo: replyTo?.id ?? null }),
+        comment => {
+          setConversation({ ...conversation, comments: [...conversation.comments, comment] }); setBody(''); setReplyTo(null);
+          setNotice('Note saved on this computer.'); onSaved();
+        },
+        shareNow ? () => api<SyncResult>('sync', { remote }) : undefined,
+      );
+      if (result.kind === 'shared') sharing.onShared(result.result);
+      else if (result.kind === 'saved-unshared') { setShareError(result.error); sharing.onShared(null); }
+    } catch (error) { setError(errorMessage(error)); }
+    finally { setBusy(false); setSharingNow(false); if (shareNow) sharing.onSharing(false); }
+  }
   async function refresh() {
     if (editGuard.editing) { setDeferredRefresh(true); return; }
     const scroll = { left: window.scrollX, top: window.scrollY };
@@ -160,17 +184,16 @@ export function CommitNotesWorkspace({ initialCommit, syncVersion, backgroundRev
           }}
           onReply={item => { setReplyTo(item); document.getElementById('note-body')?.focus(); }} />)}
       </section>
+      <SavedButUnshared error={shareError} onShare={onShare} />
       <form className="card composer" onSubmit={event => {
-        event.preventDefault(); setBusy(true); setError(''); setNotice('');
-        void api<Comment>('comments', { commit: conversation.commit, body, replyTo: replyTo?.id ?? null }).then(comment => {
-          setConversation({ ...conversation, comments: [...conversation.comments, comment] }); setBody(''); setReplyTo(null);
-          setNotice('Note saved on this computer.'); onSaved();
-        }).catch(error => setError(errorMessage(error))).finally(() => setBusy(false));
+        event.preventDefault();
+        const submitter = (event.nativeEvent as SubmitEvent).submitter as HTMLButtonElement | null;
+        void submitComment(submitter?.value === 'share');
       }}>
         <fieldset disabled={busy}><label htmlFor="note-body">{replyTo ? `Reply to ${replyTo.author.name}` : 'Leave a note'}</label>
           {replyTo && <div className="reply-context"><p>{commentBody(replyTo)}</p><button type="button" className="text-button" onClick={() => setReplyTo(null)}>Cancel reply</button></div>}
           <textarea id="note-body" value={body} onChange={event => setBody(event.target.value)} placeholder="What should the next person know about this change?" required maxLength={20000} rows={5} />
-          <div className="composer-footer"><small>Saved here first. Share when you’re ready.</small><button disabled={busy || !body.trim()}>{busy ? 'Saving…' : replyTo ? 'Save reply' : 'Save note'}</button></div>
+          <CommentSubmitActions busy={busy} sharingNow={sharingNow} canSave={Boolean(body.trim())} remote={sharing.remote} onChooseRemote={onShare} />
         </fieldset>
       </form>
     </>}

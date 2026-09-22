@@ -191,6 +191,10 @@ details p { font-size: 13px; }
 .review-timeline > .comment > .replies { margin: 0 16px 16px; }
 .composer { padding: 20px; margin-top: 20px; }
 .composer-footer { margin-top: 14px; }
+.submission-help { min-width: 0; }
+.submission-help small { display: block; }
+.submission-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; flex-shrink: 0; }
+.composer-footer { flex-wrap: wrap; }
 .reply-context { border-left: 3px solid var(--quote); padding-left: 12px; margin-bottom: 14px; }
 .reply-context p { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 110px; overflow: auto; color: var(--muted); font-size: 13px; }
 .notice, .error, .inline-hint { border: 1px solid; border-radius: 6px; padding: 12px 16px; margin: 16px 0; font-size: 13px; line-height: 1.6; overflow-wrap: anywhere; }
@@ -253,5 +257,7 @@ footer { text-align: center; margin-top: 40px; padding-top: 20px; border-top: 1p
   .change-title { flex-wrap: wrap; gap: 6px; }
   .updates-notice { min-height: 94px; }
   .background-status { min-height: 52px; }
+  .submission-actions { justify-content: stretch; }
+  .submission-actions button { flex: 1; }
 }
 @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }

@@ -3,9 +3,11 @@ import type { BackgroundUpdateStatus, SyncResult } from '../core/models.js';
 import { api, errorMessage } from './api.js';
 import { ErrorNotice } from './components.js';
 
-export function SharingPanel({ busy, localChanges, onBusy, onFinished, onBackgroundRevision }: {
+export function SharingPanel({ busy, localChanges, onBusy, onFinished, onBackgroundRevision, onRemoteChange, externalResult }: {
   busy: boolean; localChanges: boolean; onBusy: (busy: boolean) => void; onFinished: (success: boolean) => void;
   onBackgroundRevision: (revision: number) => void;
+  onRemoteChange: (remote: string) => void;
+  externalResult: SyncResult | null;
 }) {
   const [remotes, setRemotes] = useState<string[]>([]);
   const [remote, setRemote] = useState('');
@@ -19,6 +21,11 @@ export function SharingPanel({ busy, localChanges, onBusy, onFinished, onBackgro
   const [backgroundError, setBackgroundError] = useState('');
   const [statusError, setStatusError] = useState(false);
   const statusEpoch = useRef(0);
+  useEffect(() => { onRemoteChange(loading || settingsBusy ? '' : remote); }, [remote, loading, settingsBusy, onRemoteChange]);
+  useEffect(() => { if (busy) setResult(null); }, [busy]);
+  useEffect(() => {
+    if (externalResult) { setResult(externalResult); setLastShared(new Date().toLocaleTimeString()); }
+  }, [externalResult]);
   function showStatus(status: BackgroundUpdateStatus) {
     statusEpoch.current++;
     setBackground(status); onBackgroundRevision(status.revision); setStatusError(false);
@@ -98,7 +105,7 @@ export function SharingPanel({ busy, localChanges, onBusy, onFinished, onBackgro
           disabled={busy || loading || settingsBusy || !background || (!remote && !background.enabled)}
           onChange={event => void configureBackground(event.target.checked, remote || background?.remote || 'origin')} />
           Check for team updates automatically</label>
-        <p>Checks every minute while this server is running. Only receives discussions; your saved changes are uploaded when you choose Share & get updates.</p>
+        <p>Checks every minute while this server is running. Only receives discussions; upload using Share & get updates or a comment’s Save & share now button.</p>
         <button type="button" className="secondary-button" disabled={busy || settingsBusy || !background?.enabled || background.running} onClick={() => void checkNow()}>Check now</button>
         <p className="field-hint">This setting applies to all browser tabs connected to this server and resets when the server restarts.</p>
         <ErrorNotice message={backgroundError} />

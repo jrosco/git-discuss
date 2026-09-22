@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
-import type { BranchChoice, Comment, Review, RevisionDiff } from '../core/models.js';
+import type { BranchChoice, Comment, Review, RevisionDiff, SyncResult } from '../core/models.js';
 import { api, errorMessage } from './api.js';
-import { CodeSource, ErrorNotice, SavedNotice, Thread, UpdatesNotice, useEditingGuard } from './components.js';
+import { CodeSource, CommentSubmitActions, ErrorNotice, SavedButUnshared, SavedNotice, Thread, UpdatesNotice, useEditingGuard } from './components.js';
+import { submitFeedback, type ComposerSharing } from './submission.js';
 import { commentBody, isDeleted, recordVersion, reviewTitle } from '../core/changes.js';
 
 function DiffViewer({ reviewId, revisionId }: { reviewId: string; revisionId: string }) {
@@ -74,8 +75,8 @@ function VersionForm({ review, onSave, onCancel }: {
   </form>;
 }
 
-export function ReviewsWorkspace({ syncVersion, backgroundRevision, onSaved, onShare }: {
-  syncVersion: number; backgroundRevision: number; onSaved: () => void; onShare: () => void;
+export function ReviewsWorkspace({ syncVersion, backgroundRevision, sharing, onSaved, onShare }: {
+  syncVersion: number; backgroundRevision: number; sharing: ComposerSharing; onSaved: () => void; onShare: () => void;
 }) {
   const [reviews, setReviews] = useState<Review[]>([]);
   const [review, setReview] = useState<Review | null>(null);
@@ -97,6 +98,29 @@ export function ReviewsWorkspace({ syncVersion, backgroundRevision, onSaved, onS
   const [deferredRefresh, setDeferredRefresh] = useState(false);
   const editGuard = useEditingGuard();
   const hasEdits = editGuard.editing || editingTitle || addingVersion || view === 'create';
+  const [sharingNow, setSharingNow] = useState(false);
+  const [shareError, setShareError] = useState('');
+  useEffect(() => { setShareError(''); }, [sharing.successVersion]);
+
+  async function submitComment(shareNow: boolean) {
+    if (!review || busy || (shareNow && !sharing.remote)) return;
+    const remote = sharing.remote;
+    setBusy(true); setError(''); setNotice(''); setShareError(''); setSharingNow(shareNow);
+    if (shareNow) sharing.onSharing(true);
+    try {
+      const result = await submitFeedback(
+        () => api<Review['comments'][number]>(`reviews/${review.id}/comments`, { revisionId, body, replyTo: replyTo?.id ?? null }),
+        comment => {
+          remember({ ...review, comments: [...review.comments, comment] }); setBody(''); setReplyTo(null);
+          setNotice('Feedback saved on this computer.'); onSaved();
+        },
+        shareNow ? () => api<SyncResult>('sync', { remote }) : undefined,
+      );
+      if (result.kind === 'shared') sharing.onShared(result.result);
+      else if (result.kind === 'saved-unshared') { setShareError(result.error); sharing.onShared(null); }
+    } catch (error) { setError(errorMessage(error)); }
+    finally { setBusy(false); setSharingNow(false); if (shareNow) sharing.onSharing(false); }
+  }
 
   function remember(next: Review) {
     setReviews(current => [...current.filter(item => item.id !== next.id), next]);
@@ -256,17 +280,17 @@ export function ReviewsWorkspace({ syncVersion, backgroundRevision, onSaved, onS
             }}
             onReply={item => { setReplyTo(item); document.getElementById('review-body')?.focus(); }} />)}
         </section>
+        <SavedButUnshared error={shareError} onShare={onShare} />
         <form className="card composer" onSubmit={event => {
-          event.preventDefault(); setBusy(true); setError(''); setNotice('');
-          void api<Review['comments'][number]>(`reviews/${review.id}/comments`, { revisionId, body, replyTo: replyTo?.id ?? null }).then(comment => {
-            remember({ ...review, comments: [...review.comments, comment] }); setBody(''); setReplyTo(null); setNotice('Feedback saved on this computer.'); onSaved();
-          }).catch(error => setError(errorMessage(error))).finally(() => setBusy(false));
+          event.preventDefault();
+          const submitter = (event.nativeEvent as SubmitEvent).submitter as HTMLButtonElement | null;
+          void submitComment(submitter?.value === 'share');
         }}>
           <fieldset disabled={busy}><label htmlFor="review-body">{replyTo ? `Reply to ${replyTo.author.name}` : 'Add your feedback'}</label>
             <p className="field-hint">Your {replyTo ? 'reply' : 'comment'} will refer to <strong>version {versionIndex + 1}</strong>.</p>
             {replyTo && <div className="reply-context"><p>{commentBody(replyTo)}</p><button type="button" className="text-button" onClick={() => setReplyTo(null)}>Cancel reply</button></div>}
             <textarea id="review-body" value={body} onChange={event => setBody(event.target.value)} placeholder="What works well? What could be clearer?" required maxLength={20000} rows={5} />
-            <div className="composer-footer"><small>Saved here first. Share when you’re ready.</small><button disabled={busy || !body.trim()}>{busy ? 'Saving…' : replyTo ? 'Save reply' : 'Save feedback'}</button></div>
+            <CommentSubmitActions busy={busy} sharingNow={sharingNow} canSave={Boolean(body.trim())} remote={sharing.remote} onChooseRemote={onShare} />
           </fieldset>
         </form>
       </div>

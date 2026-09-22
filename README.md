@@ -57,7 +57,7 @@ If Git reports that `discuss` is not a command, run `npm.cmd link` from this pro
 - Loopback server with launch token, Host/Origin checks, and same-origin UI
 - Integration tests against real temporary Git repositories
 
-Posting saves locally. It does not push, stage files, alter code commits, or create application commits in your working branch. Git notes have their own history. The project directory itself does not need to be initialized as a Git repository to run the application against another repository.
+CLI comment commands and the browser's **Save locally** action save on this computer without pushing. The browser also offers **Save & share now**, which saves first and then runs discussion sync. Neither action stages files, alters code commits, or creates application commits in your working branch. Git notes have their own history. The project directory itself does not need to be initialized as a Git repository to run the application against another repository.
 
 ## Stable reviews
 
@@ -108,7 +108,7 @@ To start a review:
 2. Under **Changes to review**, choose the branch containing the work. **My current saved code** means the currently checked-out Git commit (`HEAD`).
 3. Under **Compare with**, choose the starting code, often your team's `main` branch. No starting branch is silently inferred.
 4. Click **Create review**. Inspect **Code changes**, then use **Discuss these changes** to add feedback.
-5. **Save feedback** saves on this computer. Use **Share & get updates** to exchange it with teammates.
+5. Choose **Save locally** to share later, or **Save & share now** to immediately exchange saved feedback with teammates.
 
 Branch selectors include local and last-downloaded team branches, with an option to enter a branch name or commit ID manually. Help icons explain the choices on hover or keyboard focus. Only committed code is included, not unsaved or uncommitted working-file edits.
 
@@ -155,6 +155,17 @@ Each saved change shows its note count, including replies and excluding deleted 
 
 The picker loads 50 commits at a time. **Show older changes** continues from the same resolved tip, while **Refresh list** reloads branch choices and the selected branch's latest history. Remote-tracking branches reflect the last Git fetch; browsing does not fetch or check out branches. Opening a different change asks before discarding an unsaved note. Only ancestors of the selected ref are listed, so unrelated Git notes and review metadata histories are excluded.
 
+### Save now, share now or later
+
+New comment and reply forms in both **Reviews** and **Change notes** offer two actions:
+
+- **Save locally** stores the feedback in Git on this computer. Later, use **Share & get updates** at the top of the page to submit your saved work together.
+- **Save & share now** saves the comment or reply, then runs the existing sync action using the **Team repository** selected in Sharing settings. This also shares **all other locally saved review discussions and change notes**, not just the new comment. It is disabled until a team repository is available.
+
+Locally saved comments are not a private pending-review batch: any later share includes them. Unsubmitted text still in a text area is a draft and is never uploaded. Submitting a form without selecting the share action defaults to saving locally.
+
+Saving and sharing are separately acknowledged. Once saving succeeds, the submitted text is cleared and the comment appears locally. If the subsequent sync fails, the UI says **Your comment was saved locally, but sharing was not confirmed** and directs you to retry **Share & get updates**—without posting the comment again. If the save request fails, the draft remains and no sync is started.
+
 ## Sync discussions with teammates
 
 Both developers use the same Git remote and run:
@@ -180,7 +191,7 @@ For a new clone, run `git discuss sync` to download discussions that normal clon
 
 In **Sharing settings & help**, select your team repository and enable **Check for team updates automatically**. Checks start immediately, then run once per minute after the preceding check finishes. **Check now** runs a receive-only check sooner. Checks never overlap.
 
-The local server fetches discussion refs and reconciles incoming notes, reviews, edits, and deletions into local storage. This operation **never pushes**, even when you have unpublished local feedback. It does not change code branches, working files, or remote-tracking code branches. **Share & get updates** remains the explicit upload action.
+The local server fetches discussion refs and reconciles incoming notes, reviews, edits, and deletions into local storage. This operation **never pushes**, even when you have unpublished local feedback. It does not change code branches, working files, or remote-tracking code branches. Uploads remain explicit through **Share & get updates** or a comment form's **Save & share now**.
 
 The browser checks the server's lightweight update status every five seconds. New local discussion data produces a **New feedback available → Show updates** notice. The active discussion and review list stay as loaded until you choose to show updates; commit note counts can refresh quietly. Your draft, selected commit/version, and expanded thread details stay in place. The notice only occupies space when updates are available; no blank placeholder is reserved. Inline edit/title/version forms defer refresh until finished or canceled, including when another user edits or deletes the same content. A deleted review still offers its unsaved new-comment draft for copying when you apply the update.
 

@@ -160,3 +160,31 @@ export function SavedNotice({ message, onShare }: { message: string; onShare: ()
     <button type="button" className="text-button" onClick={onShare}>Share with your team →</button>
   </div>;
 }
+
+export function CommentSubmitActions({ busy, sharingNow, canSave, remote, onChooseRemote }: {
+  busy: boolean; sharingNow: boolean; canSave: boolean; remote: string; onChooseRemote: () => void;
+}) {
+  return <div className="composer-footer">
+    <div className="submission-help"><small>Save locally now, and share when you’re ready.</small>
+      <small>{remote ? `Sharing sends all saved reviews and change notes to ${remote}.` : 'Choose a team repository to share now. You can still save locally.'}</small>
+      {!remote && <button type="button" className="text-button" onClick={onChooseRemote}>Sharing settings</button>}
+    </div>
+    <div className="submission-actions">
+      <button type="submit" name="action" value="local" className="secondary-button" disabled={busy || !canSave}>
+        {busy && !sharingNow ? 'Saving…' : 'Save locally'}
+      </button>
+      <button type="submit" name="action" value="share" disabled={busy || !canSave || !remote}>
+        {sharingNow ? 'Saving & sharing…' : 'Save & share now'}
+      </button>
+    </div>
+  </div>;
+}
+
+export function SavedButUnshared({ error, onShare }: { error: string; onShare: () => void }) {
+  if (!error) return null;
+  return <div className="error" role="alert"><strong>Your comment was saved locally, but sharing was not confirmed.</strong>
+    <p>You don’t need to post it again. Use Share & get updates to retry uploading your saved feedback.</p>
+    <button type="button" className="secondary-button" onClick={onShare}>Go to sharing</button>
+    <details><summary>Technical details</summary><pre>{error}</pre></details>
+  </div>;
+}
