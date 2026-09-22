@@ -33,7 +33,10 @@ export async function createServer(reviews: Reviews, initialCommit = 'HEAD') {
     reply.code(400).send({ error: error instanceof Error ? error.message : 'Request failed.' });
   });
 
-  app.get('/api/repository', async () => ({ root: reviews.repository.root, initialCommit }));
+  app.get('/api/repository', async () => ({
+    root: reviews.repository.root, initialCommit,
+    currentBranch: await reviews.repository.git('branch', '--show-current') || null,
+  }));
   app.get('/api/remotes', async () => reviews.repository.remotes());
   app.post('/api/sync', async request => new Synchronization(reviews.repository).sync(syncInputSchema.parse(request.body)));
   app.get('/api/branches', async () => reviews.repository.branches());

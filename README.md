@@ -94,7 +94,11 @@ The review ID is positional; `--revision` is optional and may only appear once. 
 
 ### Using the browser
 
-The browser opens in **Reviews**, with readable review cards and a **Start a review** button. You can find a review by title or author, see its version/comment counts, and open it without entering any IDs. The first-use screen explains the three steps: choose changes, leave feedback, and share with the team.
+The browser opens in **Reviews**, with a compact review list and a **Start a review** button. You can find a review by title or author, see its version/comment counts, and open it without entering any IDs. The first-use screen explains the three steps: choose changes, leave feedback, and share with the team.
+
+The interface uses a simple GitHub pull-request-inspired layout: light or dark colors, project navigation, a prominent review title, underlined **Discussion** / **Code changes** controls, and bordered comment threads. On desktop, a small right-hand sidebar holds the selected version and Git details; on smaller screens, those controls appear above the discussion. The green **Review** label identifies the type of discussion, not an approval or merge status.
+
+Use the **Light / Dark** button in the header to switch appearance. The first visit uses your system preference; choosing a mode saves it in browser storage for that server address. A different launch port has separate browser storage (use a fixed `--port` if you want the same address across launches). Switching themes keeps your drafts and selections. If browser storage is blocked, the toggle still works for the current page.
 
 To start a review:
 
@@ -110,7 +114,7 @@ Open reviews have separate **Discussion** and **Code changes** views. The versio
 
 Use **Add updated code** → **Save new version** after changing the code. Previous feedback and code versions remain available. The starting code defaults to the previous version's saved base. Adding versions, refreshing feedback, and sharing preserve the version being discussed and any draft. Use **View latest version** to switch explicitly; changing versions or reviews asks before discarding unsaved feedback. Returning to the review list keeps the current review draft and marks its card.
 
-The left-hand navigation separates **Reviews** from **Change notes** (the previous **Commit notes** screen). **Which should I use?** explains when each is useful. Switching workspaces preserves drafts and selections within the open page; these drafts do not survive a page reload. On smaller screens, navigation sits above the content. Replies can cross review versions; the feedback form explicitly names the version that a new comment or reply will reference.
+Project navigation separates **Reviews** from **Change notes** (the previous **Commit notes** screen). **Which should I use?** explains when each is useful. Switching workspaces preserves drafts and selections within the open page; these drafts do not survive a page reload. Replies can cross review versions; the feedback form explicitly names the version that a new comment or reply will reference.
 
 ### Revision diff viewer
 

@@ -168,16 +168,29 @@ export function ReviewsWorkspace({ syncVersion, onSaved, onShare }: {
     {view === 'review' && review && <>
       <div className="workspace-toolbar"><button type="button" className="text-button" disabled={busy} onClick={() => { setView('list'); setAddingVersion(false); }}>← All reviews</button>
         <button type="button" className="secondary-button" disabled={busy} onClick={() => void refresh()}>Refresh feedback</button></div>
-      <header className="review-title"><h3>{review.title}</h3><p>Started by {review.author.name} · {new Date(review.createdAt).toLocaleDateString()}</p></header>
+      <header className="pull-request-header"><h2>{review.title}</h2>
+        <div className="review-summary"><span className="review-kind">Review</span><p><strong>{review.author.name}</strong> started this review on {new Date(review.createdAt).toLocaleDateString()} · {review.revisions.length} {review.revisions.length === 1 ? 'version' : 'versions'}</p></div>
+      </header>
       <SavedNotice message={notice} onShare={onShare} />
-      <section className="card version-picker" aria-label="Review version">
-        <div className="row"><div className="grow"><label htmlFor="review-version">Which version are you reviewing?</label>
+      <div className="view-switch" role="group" aria-label="Review view">
+        <button type="button" aria-pressed={tab === 'discussion'} aria-controls="review-discussion" onClick={() => setTab('discussion')}>Discussion <span className="count">{review.comments.length}</span></button>
+        <button type="button" aria-pressed={tab === 'changes'} aria-controls="review-changes" onClick={() => setTab('changes')}>Code changes</button>
+      </div>
+      <div className="pull-request-layout">
+      <aside className="review-sidebar" aria-label="Review details">
+        <section className="version-picker" aria-label="Review version">
+          <label htmlFor="review-version">Which version are you reviewing?</label>
           <select id="review-version" value={revisionId} disabled={busy || addingVersion} onChange={event => chooseVersion(event.target.value)}>
-            {review.revisions.map((item, index) => <option key={item.id} value={item.id}>Version {index + 1}{index === review.revisions.length - 1 ? ' · latest' : ''} · {item.author.name} · {new Date(item.createdAt).toLocaleString()}</option>)}
-          </select></div><button type="button" className="secondary-button" disabled={busy || addingVersion} onClick={() => setAddingVersion(true)}>Add updated code</button></div>
-        {latest && latest.id !== revisionId && <div className="inline-hint">You’re looking at an earlier version. <button type="button" className="text-button" disabled={busy || addingVersion} onClick={() => chooseVersion(latest.id)}>View latest version</button></div>}
+            {review.revisions.map((item, index) => <option key={item.id} value={item.id}>Version {index + 1}{index === review.revisions.length - 1 ? ' · latest' : ''}</option>)}
+          </select>
+          {version && <p className="field-hint">Saved by {version.author.name}<br />{new Date(version.createdAt).toLocaleDateString()}</p>}
+          <button type="button" className="secondary-button" disabled={busy || addingVersion} onClick={() => setAddingVersion(true)}>Add updated code</button>
+          {latest && latest.id !== revisionId && <div className="inline-hint">You’re looking at an earlier version. <button type="button" className="text-button" disabled={busy || addingVersion} onClick={() => chooseVersion(latest.id)}>View latest version</button></div>}
+        </section>
+        <section className="sidebar-section"><h3>About this discussion</h3><p>Feedback from all versions stays together. New comments refer to <strong>version {versionIndex + 1}</strong>.</p></section>
         <details className="technical-details"><summary>Git details & IDs</summary><dl><dt>Review ID</dt><dd><code>{review.id}</code></dd><dt>Version ID</dt><dd><code>{revisionId}</code></dd><dt>Comparison commit (base)</dt><dd><code>{version?.base}</code></dd><dt>Reviewed commit (head)</dt><dd><code>{version?.head}</code></dd></dl></details>
-      </section>
+      </aside>
+      <div className="review-main">
       {addingVersion && <VersionForm review={review} onCancel={() => setAddingVersion(false)} onSave={async input => {
         setBusy(true);
         try {
@@ -185,15 +198,11 @@ export function ReviewsWorkspace({ syncVersion, onSaved, onShare }: {
           remember(next); setAddingVersion(false); setNotice(`Version ${next.revisions.length} saved. You’re still viewing version ${versionIndex + 1}; your feedback draft stays with it.`); onSaved();
         } finally { setBusy(false); }
       }} />}
-      <div className="view-switch" role="group" aria-label="Review view">
-        <button type="button" aria-pressed={tab === 'discussion'} aria-controls="review-discussion" onClick={() => setTab('discussion')}>Discussion <span className="count">{review.comments.length}</span></button>
-        <button type="button" aria-pressed={tab === 'changes'} aria-controls="review-changes" onClick={() => setTab('changes')}>Code changes</button>
-      </div>
       <div id="review-changes" hidden={tab !== 'changes'}>{version && <DiffViewer key={`${review.id}/${revisionId}`} reviewId={review.id} revisionId={revisionId} />}
         <button type="button" className="secondary-button" onClick={() => { setTab('discussion'); requestAnimationFrame(() => document.getElementById('review-body')?.focus()); }}>Discuss these changes →</button>
       </div>
       <div id="review-discussion" hidden={tab !== 'discussion'}>
-        <section className="card discussion" aria-label="Review discussion">
+        <section className="discussion review-timeline" aria-label="Review discussion">
           <div className="section-header"><h3>Discussion</h3><span className="muted">Feedback from all versions</span></div>
           {review.comments.length === 0 && <div className="empty"><h3>What should your teammates know?</h3><p>Ask a question, explain a decision, or suggest an improvement.</p></div>}
           {review.comments.filter(item => !item.replyTo).map(comment => <Thread key={comment.id} comment={comment} comments={review.comments} versions={review.revisions} disabled={busy}
@@ -212,6 +221,8 @@ export function ReviewsWorkspace({ syncVersion, onSaved, onShare }: {
             <div className="composer-footer"><small>Saved here first. Share when you’re ready.</small><button disabled={busy || !body.trim()}>{busy ? 'Saving…' : replyTo ? 'Save reply' : 'Save feedback'}</button></div>
           </fieldset>
         </form>
+      </div>
+      </div>
       </div>
     </>}
   </>;
