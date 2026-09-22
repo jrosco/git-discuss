@@ -51,7 +51,7 @@ export function SharingPanel({ busy, localChanges, onBusy, onFinished }: {
         <details><summary>Setup command for Git users</summary><code>git remote add origin &lt;repository-url&gt;</code><p>Then choose Refresh connections above.</p></details>
       </div>}
       <p>This exchanges all saved reviews and change notes using your existing Git access. Draft text is not shared. Code snapshots referenced by the discussions travel with them.</p>
-      <p>Deleting a review on this computer does not delete the team’s copy. Getting updates can bring it back.</p>
+      <p>Edits and deletions made here are shared too. Deleted comments keep replies in place, and previous text remains in Git history.</p>
     </details>
     {busy && <p role="status" className="inline-hint">Getting team feedback, combining saved additions, and sharing your updates. Keep Git Discuss running until this finishes.</p>}
     <ErrorNotice message={error} />

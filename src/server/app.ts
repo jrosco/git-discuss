@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
 import { Reviews } from '../core/reviews.js';
 import { Synchronization } from '../core/sync.js';
+import { commentMutationSchema, reviewMutationSchema, noteCountsInputSchema } from '../core/models.js';
 import { addCommentSchema, createReviewSchema, revisionInputSchema, reviewCommentInputSchema, identifierInputSchema, commitListInputSchema, syncInputSchema } from '../core/models.js';
 
 export async function createServer(reviews: Reviews, initialCommit = 'HEAD') {
@@ -41,12 +42,22 @@ export async function createServer(reviews: Reviews, initialCommit = 'HEAD') {
   app.post('/api/sync', async request => new Synchronization(reviews.repository).sync(syncInputSchema.parse(request.body)));
   app.get('/api/branches', async () => reviews.repository.branches());
   app.get('/api/commits', async request => reviews.repository.commits(commitListInputSchema.parse(request.query)));
+  app.post('/api/note-counts', async request => reviews.repository.noteCounts(noteCountsInputSchema.parse(request.body).commits));
   const reviewId = (params: unknown) => z.object({ id: identifierInputSchema }).parse(params).id;
   app.get('/api/reviews', async () => reviews.listReviews());
   app.post('/api/reviews', async (request, reply) => {
     return reply.code(201).send(await reviews.createReview(createReviewSchema.parse(request.body)));
   });
   app.get('/api/reviews/:id', async request => reviews.review(reviewId(request.params)));
+  app.post('/api/reviews/:id/change', async request => reviews.changeReview(reviewId(request.params), reviewMutationSchema.parse(request.body)));
+  app.post('/api/reviews/:id/comments/:commentId/change', async request => {
+    const { id, commentId } = z.object({ id: identifierInputSchema, commentId: identifierInputSchema }).parse(request.params);
+    return reviews.changeReviewComment(id, commentId, commentMutationSchema.parse(request.body));
+  });
+  app.post('/api/commits/:commit/comments/:commentId/change', async request => {
+    const { commit, commentId } = z.object({ commit: z.string().min(1).max(256), commentId: identifierInputSchema }).parse(request.params);
+    return reviews.changeCommitComment(commit, commentId, commentMutationSchema.parse(request.body));
+  });
   app.get('/api/reviews/:id/revisions/:revisionId/diff', async request => {
     const params = z.object({ id: identifierInputSchema, revisionId: identifierInputSchema }).parse(request.params);
     return reviews.revisionDiff(params.id, params.revisionId);

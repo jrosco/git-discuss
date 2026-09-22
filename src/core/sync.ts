@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { NOTES_REF, Repository } from '../git/repository.js';
 import { syncInputSchema, type Comment, type Review, type SyncResult } from './models.js';
-import { canonical, mergeRecords, mergeReviews, parseComments, parseReview } from './reconciliation.js';
+import { canonical, mergeComments, mergeReviews, parseComments, parseReview } from './reconciliation.js';
 
 const REVIEWS = 'refs/git-discuss/reviews/';
 type RefMap = Map<string, string>;
@@ -59,7 +59,7 @@ export class Synchronization {
       const left = await this.readNotes(local);
       const right = await this.readNotes(remote);
       for (const commit of new Set([...left.keys(), ...right.keys()])) {
-        files.set(commit, canonical(mergeRecords(left.get(commit) ?? [], right.get(commit) ?? [])));
+        files.set(commit, canonical(mergeComments(left.get(commit) ?? [], right.get(commit) ?? [])));
         retained.add(commit);
       }
       const same = (notes: Map<string, Comment[]>) => notes.size === files.size &&

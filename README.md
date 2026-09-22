@@ -45,6 +45,7 @@ If Git reports that `discuss` is not a command, run `npm.cmd link` from this pro
 - Stable UUID review identities and append-only revisions with retained base/head commits
 - Review-wide threaded discussions with explicit revision context
 - Readable CLI review lists, unambiguous short IDs, latest-revision comments, and local review deletion
+- Web editing of review titles, comments, and replies; syncable deletion with retained history
 - Read-only unified diffs of retained review revisions in the browser
 - One-command / one-click sync of reviews and commit notes with a configured Git remote
 - Add-only reconciliation of concurrent comments and revisions, with atomic publication
@@ -122,19 +123,34 @@ Select a review, choose a version, and open **Code changes** to see the read-onl
 
 Diffs are served through the authenticated `GET /api/reviews/:id/revisions/:revisionId/diff` endpoint. Repository external diff and text conversion helpers are disabled. Whitespace is preserved, and source text is rendered as text. Diffs over 2 MiB or 20,000 lines show an error with a local `git diff <base> <head>` fallback; they are not silently truncated. Inline commenting and side-by-side comparison are not implemented.
 
-### Delete a local review
+### Edit or delete in the browser
+
+- Open a review and choose **Edit title**, then **Save title**. **Title history** in the sidebar shows earlier titles.
+- Each comment and reply in **Reviews** and **Change notes** has **Edit** and **Delete** actions. Editing opens an inline form with **Save changes** and **Cancel**. **Edited · View history** shows the original and subsequent text.
+- Deleting a comment asks for confirmation, replaces its text with **This comment was deleted**, and keeps replies in place. Replies can be edited or deleted independently.
+- **Delete review** asks for confirmation and removes the review from the list, including access to its discussion through normal navigation. Its retained deletion record is shared with the team on the next **Share & get updates**, so an older copy cannot bring it back.
+
+Changes save locally first and record the current Git author and timestamp. The local launch session can manage the repository's discussions; Git author metadata is not an ownership permission check. Saves include the version of the item that was opened, so a stale editor cannot silently overwrite an edit that has already arrived locally. If this check fails, the inline draft stays available: copy it if needed, refresh the discussion, cancel, and reopen Edit using the current text.
+
+Deletion is a retained marker, not secure erasure. Original text, edit history, replies, review revisions, and referenced code remain in Git. There is no restore/undelete action yet. Draft feedback on an externally deleted review is shown for copying when that deletion is received.
+
+Edited/deleted records use schema version 2 with an append-only `changes` array. Existing version-1 discussions remain readable without migration. All teammates should update the application before sharing edits or deletions: older clients reject version-2 records rather than silently dropping this history. Raw JSON output (`review show`, `show`, or `git notes`) contains original text plus change records; the web UI displays the effective text, and `review list` shows the effective title.
+
+### Remove a review only from this clone (CLI)
 
 ```powershell
 git discuss review delete <review-id>
 ```
 
-Deletion removes that review's local ref, including access to its snapshot history and discussions through the application. It uses the application lock and an expected-object-ID check. Other reviews, commit-linked notes, branches, and working files are unaffected. Code retained only by the deleted ref may eventually be garbage-collected. There is no application undo or remote deletion propagation.
+This existing CLI command removes the local review ref rather than recording the web UI's shared deletion marker. It uses the application lock and an expected-object-ID check. Other reviews, commit-linked notes, branches, and working files are unaffected. Code retained only by the removed ref may eventually be garbage-collected. The remote copy can be fetched again on sync. Use **Delete review** in the browser when you want the deletion shared with the team.
 
 ### Notes on individual saved changes
 
 The existing `comment` / `show` commands and browser **Change notes** workspace remain independent commit-linked discussions. They are not automatically imported into reviews; storage is still `refs/notes/git-discuss`.
 
 In **Change notes**, **Where should we look?** lists local branches, last-downloaded team branches, and **My current saved code** (`HEAD`, including detached HEAD). The list leads with each change's description and author, with dates and short IDs as secondary details. Click a change to open its notes directly—there is no separate load step. The open change is highlighted. **Have a specific commit ID or branch?** exposes a manual input for Git users.
+
+Each saved change shows its note count, including replies and excluding deleted comments. Counts update when you save or delete a note, refresh, or share updates, without resetting the chosen branch or older loaded pages. Review discussions are separate and are not included in these counts. If a stored note cannot be read, its count is shown as **Notes unavailable** rather than zero.
 
 The picker loads 50 commits at a time. **Show older changes** continues from the same resolved tip, while **Refresh list** reloads branch choices and the selected branch's latest history. Remote-tracking branches reflect the last Git fetch; browsing does not fetch or check out branches. Opening a different change asks before discarding an unsaved note. Only ancestors of the selected ref are listed, so unrelated Git notes and review metadata histories are excluded.
 
@@ -165,13 +181,15 @@ For a new clone, run `git discuss sync` to download discussions that normal clon
 - The remote must permit custom refs and atomic Git pushes. Sync requires one matching fetch/push URL for the selected remote. Split URLs or multiple destinations need a separate, single-destination remote.
 - Configure Git authentication beforehand using your usual credential manager or SSH agent. Sync disables terminal credential prompts and limits each network subprocess to two minutes. Authentication/network errors are displayed; configure access and retry.
 - Sync transfers `refs/notes/git-discuss` and all `refs/git-discuss/reviews/*`, including code objects retained by those discussions. It does not move code branches, update remote-tracking code branches, check out files, or publish unrelated notes refs. Use normal Git commands to fetch/push branch tips.
-- Deletions are **not** propagated. A review deleted only locally will be downloaded again if it exists on the remote; a ref deleted only remotely can be uploaded again from another clone. Shared deletion requires a future tombstone protocol.
+- Web edits and deletion markers are propagated. Removing a ref directly (or using the existing local-only CLI delete command) is not a shared deletion; another clone can supply that ref again. Web-deleted reviews remain hidden after syncing with older snapshots.
 
 ### Reconciliation and failure handling
 
-Sync holds the application write lock, fetches remote discussion refs into a unique temporary namespace, and validates every snapshot before updating local discussion refs. It combines immutable comment/revision records by ID. Identical records are deduplicated, and additions from both developers are retained. Existing sequence constraints preserve reply-before-child and revision history order; concurrent records are ordered deterministically by timestamp and UUID. Concurrent review revisions are both retained, not rebased or collapsed into one code change. Reviewers should explicitly select which revision they intend to discuss.
+Sync holds the application write lock, fetches remote discussion refs into a unique temporary namespace, and validates every snapshot before updating local discussion refs. It combines immutable comment/revision records and their append-only change histories by ID. Identical records are deduplicated, and additions from both developers are retained. Existing sequence constraints preserve parent-before-reply and revision history order; concurrent records are ordered deterministically by timestamp and UUID. Concurrent review revisions are both retained, not rebased or collapsed into one code change. Reviewers should explicitly select which revision they intend to discuss.
 
-Different contents for the same record ID, changed review identity/title metadata, incompatible ordering, malformed history, or unsupported fields stop reconciliation with an explanation. Sync never selects one conflicting record silently. Resolve such a conflict with the other developer before retrying; there is no conflict-editing UI yet.
+Concurrent edits to the same comment or review title are both retained in its history; the final edit in the deterministic merged order is displayed. This is a consistent ordering, not a guarantee that unsynchronized clocks identify the actual last human edit. Deletion takes precedence over edits regardless of their order. A review deleted while a teammate adds feedback stays deleted, with that feedback retained in its stored history.
+
+Different contents for the same immutable record or change ID, changes to original review identity/title metadata outside the supported edit history, incompatible ordering, malformed history, or unsupported fields stop reconciliation with an explanation. Sync never selects one conflicting immutable record silently. Resolve such a conflict with the other developer before retrying; there is no raw-history conflict-editing UI yet.
 
 Successful reconciliation publishes all local refs in one compare-and-swap transaction, then uses an atomic, non-forced push. If upload fails (including another developer pushing concurrently), the reconciled work remains saved locally. Retry Sync to fetch the newer remote state, reconcile again, and upload. A server that cannot perform atomic pushes is reported as an error; there is no partial-push fallback. A network failure after server acceptance may leave the upload outcome uncertain; retrying is safe and deduplicates records.
 
@@ -198,11 +216,11 @@ Each review is stored at `refs/git-discuss/reviews/<review-id>`. The ref points 
 
 Every write creates a new snapshot commit. Its first parent is the previous snapshot when one exists. Creation and revision writes also link their base/head code commits as parents (duplicates removed). These links retain all reviewed commits and trees even after branches are rewritten or deleted and Git garbage collection runs. Comment-only writes retain code through their previous snapshot. Review snapshots are application metadata commits, not code commits to merge into a working branch.
 
-Writers hold the repository-wide application lock and publish the snapshot with `git update-ref` using the expected previous object ID. A failed or interrupted write before publication leaves the previous snapshot intact; unpublished objects can be garbage-collected. Ordinary writes change one ref atomically; sync publishes its local ref updates together. Sync merge snapshots retain local and remote histories as parents. This remains a versioned snapshot format with conservative add-only reconciliation, not a general-purpose editable event protocol. There is currently no review editing, automatic commit-to-review notes index, or conversion of commit notes into reviews.
+Writers hold the repository-wide application lock and publish the snapshot with `git update-ref` using the expected previous object ID. A failed or interrupted write before publication leaves the previous snapshot intact; unpublished objects can be garbage-collected. Ordinary writes change one ref atomically; sync publishes its local ref updates together. Sync merge snapshots retain local and remote histories as parents. Edits and web deletions append change records without rewriting original records; deleted review refs are retained to preserve the deletion and reviewed code. There is currently no automatic commit-to-review notes index or conversion of commit notes into reviews.
 
 ### Commit-linked notes
 
-The original workflow attaches a JSON array of immutable comment records to an exact commit at `refs/notes/git-discuss`. Writes append a record under the same application lock, rewriting the note and retaining its previous version in notes history. Local-only notes do not guarantee retention of their annotated code after history rewriting. Sync snapshots add code-retention parent links before sharing notes. The note data is still readable with `git notes --ref=git-discuss show <commit>`.
+The original workflow attaches a JSON array of comment records to an exact commit at `refs/notes/git-discuss`. Writes append comments or append edit/deletion records to a comment's `changes` history under the same application lock, rewriting the note and retaining its previous version in notes history. Original comment fields remain immutable. Local-only notes do not guarantee retention of their annotated code after history rewriting. Sync snapshots add code-retention parent links before sharing notes. The raw note data is still readable with `git notes --ref=git-discuss show <commit>`.
 
 ### Boundaries
 
@@ -214,7 +232,7 @@ The original workflow attaches a JSON array of immutable comment records to an e
 - Git identity and timestamps are recorded metadata, not verified signatures.
 - The server is scoped to one repository. It is not intended to be exposed as a network service.
 
-Next milestones: richer sync status/conflict inspection and shared deletion semantics. Git notes can also become the commit-facing index and summary layer for stable reviews.
+Next milestones: richer sync status/conflict inspection and explicit restore workflows. Git notes can also become the commit-facing index and summary layer for stable reviews.
 
 ## Development checks
 

@@ -161,6 +161,14 @@ details p { font-size: 13px; }
 .comment-header { flex-wrap: wrap; gap: 8px; font-size: 13px; }
 .avatar { display: grid; place-items: center; flex-shrink: 0; width: 32px; height: 32px; border: 1px solid var(--avatar-border); border-radius: 50%; background: var(--info-bg); color: var(--info-fg); font-weight: 600; }
 .comment-body { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.7; font-size: 14px; }
+.comment-actions, .review-management { display: flex; flex-wrap: wrap; gap: 16px; margin: 12px 0; }
+.danger-text { color: var(--error-fg); }
+.deleted-comment { color: var(--muted); font-style: italic; }
+.comment-editor { margin: 16px 0; }
+.comment-history { margin: 12px 0; font-size: 12px; }
+.comment-history .comment-body { margin: 8px 0; }
+.review-timeline > .comment > .comment-actions, .review-timeline > .comment > .comment-editor, .review-timeline > .comment > .comment-history, .review-timeline > .comment > .error { margin: 12px 16px; }
+.guided-form > input { width: 100%; }
 .replies { border-left: 2px solid var(--border); margin-top: 16px; }
 .replies .comment { padding: 8px 0 8px 16px; }
 .review-timeline { position: relative; isolation: isolate; padding-bottom: 2px; }
@@ -197,6 +205,10 @@ details p { font-size: 13px; }
 .change-card[aria-current="true"] { background: var(--info-bg); border-left: 3px solid var(--link); }
 .change-title { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; overflow-wrap: anywhere; font-size: 14px; }
 .change-title .version-badge { flex-shrink: 0; }
+.change-title > span:first-child { min-width: 0; }
+.change-badges { display: inline-flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; flex-shrink: 0; }
+.note-count { display: inline-flex; align-items: center; gap: 5px; color: var(--muted); font-size: 12px; font-weight: 400; white-space: nowrap; }
+.note-count.has-notes { color: var(--link); font-weight: 600; }
 .commit-history-footer { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 12px; }
 footer { text-align: center; margin-top: 40px; padding-top: 20px; border-top: 1px solid var(--border); color: var(--muted); font-size: 12px; line-height: 1.6; }
 @media (max-width: 850px) {
@@ -229,5 +241,6 @@ footer { text-align: center; margin-top: 40px; padding-top: 20px; border-top: 1p
   .review-timeline > .comment { margin-left: 0; }
   .review-timeline > .comment > .comment-header > .avatar { position: static; width: 26px; height: 26px; }
   .review-timeline::before { display: none; }
+  .change-title { flex-wrap: wrap; gap: 6px; }
 }
 @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }

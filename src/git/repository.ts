@@ -2,7 +2,9 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { mkdir, rmdir } from 'node:fs/promises';
 import path from 'node:path';
-import { commitListInputSchema, type BranchChoice, type CommitPage } from '../core/models.js';
+import { commitListInputSchema, noteCountsInputSchema, type BranchChoice, type CommitPage, type NoteCounts } from '../core/models.js';
+import { activeCommentCount } from '../core/changes.js';
+import { parseComments } from '../core/reconciliation.js';
 
 const execute = promisify(execFile);
 export const NOTES_REF = 'refs/notes/git-discuss';
@@ -114,9 +116,28 @@ export class Repository {
     const fields = output.split('\0');
     const commits: CommitPage['commits'] = [];
     for (let index = 0; index + 3 < fields.length; index += 4) {
-      commits.push({ commit: fields[index], author: fields[index + 1], authoredAt: fields[index + 2], subject: fields[index + 3] });
+      commits.push({ commit: fields[index], author: fields[index + 1], authoredAt: fields[index + 2], subject: fields[index + 3], noteCount: 0 });
     }
-    return { tip, commits: commits.slice(0, limit), nextOffset: commits.length > limit ? offset + limit : null };
+    const page = commits.slice(0, limit);
+    const counts = await this.noteCounts(page.map(item => item.commit));
+    return { tip, commits: page.map(item => ({ ...item, noteCount: counts[item.commit] })), nextOffset: commits.length > limit ? offset + limit : null };
+  }
+
+  async noteCounts(commits: string[]): Promise<NoteCounts> {
+    noteCountsInputSchema.parse({ commits });
+    const counts: NoteCounts = Object.fromEntries(commits.map(commit => [commit, 0]));
+    if (!commits.length) return counts;
+    // Read the notes index once and only inspect blobs for the requested code commits.
+    // Blob IDs pin the snapshot if another writer updates the notes ref during counting.
+    const entries = await this.git('notes', `--ref=${NOTES_REF}`, 'list');
+    for (const line of entries ? entries.split('\n') : []) {
+      const [blob, commit] = line.split(' ');
+      if (!Object.hasOwn(counts, commit)) continue;
+      const text = await this.git('cat-file', 'blob', blob);
+      try { counts[commit] = activeCommentCount(parseComments(text, commit)); }
+      catch { counts[commit] = null; } // An unreadable discussion is not the same as zero notes.
+    }
+    return counts;
   }
 
   async readNote(commit: string): Promise<string | null> {

@@ -4,6 +4,8 @@ import { Repository } from '../git/repository.js';
 import { addCommentSchema, commentSchema, type AddComment, type Comment, type Conversation } from './models.js';
 import { createReviewSchema, revisionInputSchema, reviewCommentInputSchema, reviewSchema, type Review, type RevisionDiff } from './models.js';
 import { resolveIdentifier } from './identifiers.js';
+import { commentChangeSchema, commentMutationSchema, reviewMutationSchema, type CommentMutation, type ReviewMutation } from './models.js';
+import { isDeleted, recordVersion } from './changes.js';
 
 export class Reviews {
   constructor(readonly repository: Repository) {}
@@ -29,7 +31,7 @@ export class Reviews {
 
   async listReviews(): Promise<Review[]> {
     const refs = await this.repository.reviewRefs();
-    return Promise.all(refs.map(entry => this.review(entry.ref.slice('refs/git-discuss/reviews/'.length))));
+    return (await Promise.all(refs.map(entry => this.review(entry.ref.slice('refs/git-discuss/reviews/'.length))))).filter(review => !isDeleted(review));
   }
 
   async deleteReview(id: string): Promise<Review> {
@@ -53,6 +55,61 @@ export class Reviews {
       name: await this.repository.git('config', '--get', 'user.name'),
       email: await this.repository.git('config', '--get', 'user.email'),
     };
+  }
+
+  private assertEditable(record: { id: string; changes?: { id: string; kind: string }[] }, expectedVersion?: string) {
+    if (isDeleted(record)) throw new Error('This item was deleted. Refresh to see the latest discussion.');
+    if (expectedVersion !== undefined && recordVersion(record) !== expectedVersion) {
+      throw new Error('This item changed since you opened it. Refresh before editing or deleting; your draft has not been saved.');
+    }
+  }
+
+  async changeReview(id: string, input: ReviewMutation): Promise<Review> {
+    const parsed = reviewMutationSchema.parse(input);
+    return this.repository.withWriteLock(async () => {
+      const { review, oid } = await this.readReview(id);
+      this.assertEditable(review, parsed.expectedVersion);
+      const { expectedVersion: _expected, ...action } = parsed;
+      review.schema = 2;
+      review.changes = [...(review.changes ?? []), { ...action, id: randomUUID(), author: await this.author(), createdAt: new Date().toISOString() }];
+      await this.repository.writeReviewSnapshot(this.reviewRef(review.id), oid, JSON.stringify(reviewSchema.parse(review)), []);
+      return review;
+    });
+  }
+
+  private async changeCommentRecord<T extends Comment>(comment: T, input: CommentMutation): Promise<T> {
+    this.assertEditable(comment, input.expectedVersion);
+    const { expectedVersion: _expected, ...action } = input;
+    return { ...comment, schema: 2, changes: [...(comment.changes ?? []), commentChangeSchema.parse({
+      ...action, id: randomUUID(), author: await this.author(), createdAt: new Date().toISOString(),
+    })] };
+  }
+
+  async changeReviewComment(id: string, commentId: string, input: CommentMutation): Promise<Review> {
+    const parsed = commentMutationSchema.parse(input);
+    return this.repository.withWriteLock(async () => {
+      const { review, oid } = await this.readReview(id);
+      this.assertEditable(review);
+      const resolved = resolveIdentifier(commentId, review.comments.map(item => item.id), 'Comment');
+      const index = review.comments.findIndex(item => item.id === resolved);
+      review.comments[index] = await this.changeCommentRecord(review.comments[index], parsed);
+      review.schema = 2;
+      await this.repository.writeReviewSnapshot(this.reviewRef(review.id), oid, JSON.stringify(reviewSchema.parse(review)), []);
+      return review;
+    });
+  }
+
+  async changeCommitComment(ref: string, commentId: string, input: CommentMutation): Promise<Conversation> {
+    const parsed = commentMutationSchema.parse(input);
+    const commit = await this.repository.resolve(ref);
+    return this.repository.withWriteLock(async () => {
+      const comments = await this.comments(commit);
+      const resolved = resolveIdentifier(commentId, comments.map(item => item.id), 'Comment');
+      const index = comments.findIndex(item => item.id === resolved);
+      comments[index] = await this.changeCommentRecord(comments[index], parsed);
+      await this.repository.writeNote(commit, JSON.stringify(comments, null, 2));
+      return { commit, subject: await this.repository.git('show', '-s', '--format=%s', commit, '--'), comments };
+    });
   }
 
   private async revision(input: z.input<typeof revisionInputSchema>) {
@@ -81,6 +138,7 @@ export class Reviews {
   async addRevision(id: string, input: z.input<typeof revisionInputSchema>): Promise<Review> {
     return this.repository.withWriteLock(async () => {
       const { review, oid } = await this.readReview(id);
+      this.assertEditable(review);
       const revision = await this.revision(input);
       const latest = review.revisions[review.revisions.length - 1];
       if (latest.base === revision.base && latest.head === revision.head) {
@@ -97,6 +155,7 @@ export class Reviews {
     const parsed = reviewCommentInputSchema.parse(input);
     return this.repository.withWriteLock(async () => {
       const { review, oid } = await this.readReview(id);
+      this.assertEditable(review);
       const revisionId = parsed.revisionId === undefined ? review.revisions[review.revisions.length - 1].id :
         resolveIdentifier(parsed.revisionId, review.revisions.map(item => item.id), 'Revision');
       const revision = review.revisions.find(item => item.id === revisionId)!;

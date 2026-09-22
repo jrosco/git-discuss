@@ -1,5 +1,7 @@
 import { useState } from 'react';
-import type { BranchChoice, Comment, Review } from '../core/models.js';
+import type { BranchChoice, Comment, CommentMutation, Review } from '../core/models.js';
+import { commentBody, isDeleted, recordVersion } from '../core/changes.js';
+import { errorMessage } from './api.js';
 
 export function ErrorNotice({ message, onRetry }: { message: string; onRetry?: () => void }) {
   if (!message) return null;
@@ -8,6 +10,7 @@ export function ErrorNotice({ message, onRetry }: { message: string; onRetry?: (
   else if (/write is active/i.test(message)) guidance = 'Another save or share is in progress. Wait a moment, then try again.';
   else if (/user.name|user.email|identity unknown|unable to auto-detect/i.test(message)) guidance = 'Git needs your name and email before it can save feedback. Ask your project maintainer to help configure your Git identity.';
   else if (/already has this base and head/i.test(message)) guidance = 'This version already uses the selected code. Choose updated code, or cancel to keep the existing version.';
+  else if (/changed since you opened|This item was deleted/i.test(message)) guidance = message;
   else if (/no longer available locally/i.test(message)) guidance = 'This review is no longer on this computer. Return to the review list or get team updates. Your draft has been kept.';
   else if (/too large for the browser/i.test(message)) guidance = 'This code comparison is too large to show here. You can still discuss it; a Git user can inspect the complete changes using the command in the details.';
   else if (/Sync conflict|incompatible record|Unsupported|noncanonical/i.test(message)) guidance = 'Two copies of this discussion could not be combined automatically. Share these details with your teammate before trying again.';
@@ -75,22 +78,58 @@ export function CodeSource({ id, label, help, value, onChange, branches, savedOp
   </div>;
 }
 
-export function Thread({ comment, comments, onReply, versions, disabled = false }: {
+export function Thread({ comment, comments, onReply, onChange, versions, disabled = false }: {
   comment: Comment; comments: Comment[]; onReply: (comment: Comment) => void;
+  onChange?: (comment: Comment, mutation: CommentMutation) => Promise<void>;
   versions?: Review['revisions']; disabled?: boolean;
 }) {
   const version = versions?.findIndex(item => 'revisionId' in comment && item.id === comment.revisionId);
-  return <article className="comment">
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState('');
+  const [expectedVersion, setExpectedVersion] = useState(comment.id);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+  const deleted = isDeleted(comment);
+  async function change(mutation: CommentMutation) {
+    if (!onChange) return;
+    setSaving(true); setError('');
+    try { await onChange(comment, mutation); setEditing(false); }
+    catch (error) { setError(errorMessage(error)); }
+    finally { setSaving(false); }
+  }
+  return <article className="comment" aria-label={`Comment by ${comment.author.name}`}>
     <div className="comment-header">
       <span className="avatar" aria-hidden="true">{comment.author.name.slice(0, 1).toUpperCase()}</span>
       <strong>{comment.author.name}</strong>
       <time dateTime={comment.createdAt}>{new Date(comment.createdAt).toLocaleString()}</time>
       {version !== undefined && version >= 0 && <span className="version-badge">Version {version + 1}</span>}
     </div>
-    <p className="comment-body">{comment.body}</p>
-    <button type="button" className="text-button" disabled={disabled} onClick={() => onReply(comment)}>Reply</button>
+    <p className={`comment-body${deleted ? ' deleted-comment' : ''}`}>{commentBody(comment)}</p>
+    {!deleted && Boolean(comment.changes?.length) && <details className="comment-history"><summary>Edited · View history</summary>
+      <p className="comment-body"><strong>Original:</strong> {comment.body}</p>
+      {comment.changes?.map(change => <div key={change.id}><small>{change.author.name} · {new Date(change.createdAt).toLocaleString()}</small>
+        <p className="comment-body">{change.kind === 'edit' ? change.body : 'Deleted'}</p></div>)}
+    </details>}
+    <ErrorNotice message={error} />
+    {editing && <form className="comment-editor" onSubmit={event => { event.preventDefault(); void change({ kind: 'edit', body: draft, expectedVersion }); }}>
+      <label htmlFor={`edit-${comment.id}`}>Edit comment</label>
+      <textarea id={`edit-${comment.id}`} value={draft} onChange={event => setDraft(event.target.value)} required maxLength={20000} rows={4} disabled={disabled || saving} autoFocus />
+      <div className="form-actions"><button disabled={disabled || saving || deleted || !draft.trim()}>{saving ? 'Saving…' : 'Save changes'}</button>
+        <button type="button" className="secondary-button" disabled={saving} onClick={() => { setEditing(false); setError(''); }}>Cancel</button></div>
+    </form>}
+    {!deleted && !editing && <div className="comment-actions">
+      <button type="button" className="text-button" disabled={disabled || saving} onClick={() => onReply(comment)}>Reply</button>
+      {onChange && <>
+        <button type="button" className="text-button" disabled={disabled || saving} onClick={() => { setDraft(commentBody(comment)); setExpectedVersion(recordVersion(comment)); setEditing(true); setError(''); }}>Edit</button>
+        <button type="button" className="text-button danger-text" disabled={disabled || saving} onClick={() => {
+          if (window.confirm('Delete this comment? Replies will remain. The deletion will be shared the next time you share updates. Previous text remains in Git history.')) {
+            void change({ kind: 'delete', expectedVersion: recordVersion(comment) });
+          }
+        }}>Delete</button>
+      </>}
+    </div>}
     {comments.filter(item => item.replyTo === comment.id).map(child =>
-      <div className="replies" key={child.id}><Thread comment={child} comments={comments} onReply={onReply} versions={versions} disabled={disabled} /></div>)}
+      <div className="replies" key={child.id}><Thread comment={child} comments={comments} onReply={onReply} onChange={onChange} versions={versions} disabled={disabled} /></div>)}
   </article>;
 }
 

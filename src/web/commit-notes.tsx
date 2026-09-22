@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
-import type { BranchChoice, CommitPage, Comment, Conversation } from '../core/models.js';
+import type { BranchChoice, CommitPage, Comment, Conversation, NoteCounts } from '../core/models.js';
 import { api, errorMessage } from './api.js';
 import { BranchOptions, ErrorNotice, SavedNotice, Thread } from './components.js';
+import { activeCommentCount, commentBody } from '../core/changes.js';
 
-function ChangePicker({ initialCommit, currentCommit, busy, onLoad }: {
-  initialCommit: string; currentCommit?: string; busy: boolean; onLoad: (ref: string) => Promise<void>;
+function ChangePicker({ initialCommit, conversation, syncVersion, busy, onLoad }: {
+  initialCommit: string; conversation: Conversation | null; syncVersion: number; busy: boolean; onLoad: (ref: string) => Promise<void>;
 }) {
   const [branches, setBranches] = useState<BranchChoice[]>([]);
   const [branch, setBranch] = useState(initialCommit);
@@ -12,8 +13,10 @@ function ChangePicker({ initialCommit, currentCommit, busy, onLoad }: {
   const [history, setHistory] = useState<CommitPage | null>(null);
   const [browsing, setBrowsing] = useState(true);
   const [error, setError] = useState('');
+  const [countError, setCountError] = useState('');
+  const currentCommit = conversation?.commit;
   async function browse(nextBranch: string) {
-    setBrowsing(true); setError('');
+    setBrowsing(true); setError(''); setCountError('');
     try {
       const [choices, page] = await Promise.all([
         api<BranchChoice[]>('branches'), api<CommitPage>(`commits?ref=${encodeURIComponent(nextBranch)}`),
@@ -23,12 +26,30 @@ function ChangePicker({ initialCommit, currentCommit, busy, onLoad }: {
     finally { setBrowsing(false); }
   }
   useEffect(() => { void browse(initialCommit); }, [initialCommit]);
+  useEffect(() => {
+    if (!history) return;
+    let active = true;
+    setCountError('');
+    if (conversation) setHistory(current => current ? { ...current, commits: current.commits.map(item =>
+      item.commit === conversation.commit ? { ...item, noteCount: activeCommentCount(conversation.comments) } : item) } : current);
+    const commits = history.commits.map(item => item.commit);
+    void (async () => {
+      const counts: NoteCounts = {};
+      for (let offset = 0; offset < commits.length; offset += 100) {
+        Object.assign(counts, await api<NoteCounts>('note-counts', { commits: commits.slice(offset, offset + 100) }));
+        if (!active) return;
+      }
+      if (active) setHistory(current => current ? { ...current, commits: current.commits.map(item =>
+        Object.hasOwn(counts, item.commit) ? { ...item, noteCount: counts[item.commit] } : item) } : current);
+    })().catch(error => { if (active) setCountError(errorMessage(error)); });
+    return () => { active = false; };
+  }, [syncVersion, history?.tip, conversation]);
   async function loadOlder() {
     if (!history || history.nextOffset === null) return;
     setBrowsing(true); setError('');
     try {
       const page = await api<CommitPage>(`commits?ref=${history.tip}&offset=${history.nextOffset}`);
-      setHistory({ ...page, commits: [...history.commits, ...page.commits] });
+      setHistory(current => current?.tip === page.tip ? { ...page, commits: [...current.commits, ...page.commits] } : current);
     } catch (error) { setError(errorMessage(error)); }
     finally { setBrowsing(false); }
   }
@@ -43,11 +64,18 @@ function ChangePicker({ initialCommit, currentCommit, busy, onLoad }: {
     </select><button type="button" className="secondary-button" disabled={disabled} onClick={() => void browse(branch)}>Refresh list</button></div>
     <p className="field-hint">Branches are named lines of work. Team branches show the code last downloaded to this computer.</p>
     <ErrorNotice message={error} onRetry={() => void browse(branch)} />
+    {countError && <p className="field-hint" role="status">Note counts could not be refreshed. Choose Refresh list to try again.</p>}
     {browsing && <p role="status" className="muted">Finding saved changes…</p>}
     {history && <>
       <ul className="change-list" aria-label="Saved changes, newest first">{history.commits.map(item => <li key={item.commit}>
         <button type="button" className="change-card" disabled={disabled} aria-current={currentCommit === item.commit ? 'true' : undefined} onClick={() => void onLoad(item.commit)}>
-          <span className="change-title">{item.subject || 'Untitled change'}{currentCommit === item.commit && <span className="version-badge">Open</span>}</span>
+          <span className="change-title"><span>{item.subject || 'Untitled change'}</span><span className="change-badges">
+            <span className={`note-count${item.noteCount ? ' has-notes' : ''}`} title="Comments and replies, excluding deleted entries">
+              <svg aria-hidden="true" viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.3"><path d="M3 2.5h10a1 1 0 0 1 1 1v7a1 1 0 0 1-1 1H7l-4 3v-3H3a1 1 0 0 1-1-1v-7a1 1 0 0 1 1-1Z" /></svg>
+              {item.noteCount === null ? 'Notes unavailable' : `${item.noteCount} ${item.noteCount === 1 ? 'note' : 'notes'}`}
+            </span>
+            {currentCommit === item.commit && <span className="version-badge">Open</span>}
+          </span></span>
           <span className="review-card-meta">{item.author} · {new Date(item.authoredAt).toLocaleDateString()} <code>{item.commit.slice(0, 8)}</code></span>
         </button>
       </li>)}</ul>
@@ -97,7 +125,7 @@ export function CommitNotesWorkspace({ initialCommit, syncVersion, onSaved, onSh
     finally { setBusy(false); }
   }
   return <>
-    <ChangePicker initialCommit={initialCommit} currentCommit={conversation?.commit} busy={busy} onLoad={load} />
+    <ChangePicker initialCommit={initialCommit} conversation={conversation} syncVersion={syncVersion} busy={busy} onLoad={load} />
     <ErrorNotice message={error} onRetry={() => void refresh()} />
     <SavedNotice message={notice} onShare={onShare} />
     {busy && <p className="muted" role="status">Loading or saving notes…</p>}
@@ -109,10 +137,18 @@ export function CommitNotesWorkspace({ initialCommit, syncVersion, onSaved, onSh
         <details className="technical-details"><summary>Git details</summary><p>Commit ID: <code>{conversation.commit}</code></p><p>Storage: <code>refs/notes/git-discuss</code></p></details>
       </header>
       <section className="card discussion" aria-label="Notes on this change">
-        <div className="section-header"><h3>Notes <span className="count">{conversation.comments.length}</span></h3>
+        <div className="section-header"><h3>Notes <span className="count">{activeCommentCount(conversation.comments)}</span></h3>
           <button type="button" className="text-button" disabled={busy} onClick={() => void refresh()}>Refresh notes</button></div>
         {conversation.comments.length === 0 && <div className="empty"><h3>No notes yet</h3><p>Capture a question or explain a decision about this saved change.</p></div>}
         {conversation.comments.filter(comment => !comment.replyTo).map(comment => <Thread key={comment.id} comment={comment} comments={conversation.comments} disabled={busy}
+          onChange={async (item, mutation) => {
+            setBusy(true);
+            try {
+              const next = await api<Conversation>(`commits/${conversation.commit}/comments/${item.id}/change`, mutation);
+              setConversation(next); if (replyTo?.id === item.id) setReplyTo(mutation.kind === 'delete' ? null : next.comments.find(comment => comment.id === item.id) ?? null);
+              setNotice(mutation.kind === 'delete' ? 'Comment deleted on this computer.' : 'Comment updated on this computer.'); onSaved();
+            } finally { setBusy(false); }
+          }}
           onReply={item => { setReplyTo(item); document.getElementById('note-body')?.focus(); }} />)}
       </section>
       <form className="card composer" onSubmit={event => {
@@ -123,7 +159,7 @@ export function CommitNotesWorkspace({ initialCommit, syncVersion, onSaved, onSh
         }).catch(error => setError(errorMessage(error))).finally(() => setBusy(false));
       }}>
         <fieldset disabled={busy}><label htmlFor="note-body">{replyTo ? `Reply to ${replyTo.author.name}` : 'Leave a note'}</label>
-          {replyTo && <div className="reply-context"><p>{replyTo.body}</p><button type="button" className="text-button" onClick={() => setReplyTo(null)}>Cancel reply</button></div>}
+          {replyTo && <div className="reply-context"><p>{commentBody(replyTo)}</p><button type="button" className="text-button" onClick={() => setReplyTo(null)}>Cancel reply</button></div>}
           <textarea id="note-body" value={body} onChange={event => setBody(event.target.value)} placeholder="What should the next person know about this change?" required maxLength={20000} rows={5} />
           <div className="composer-footer"><small>Saved here first. Share when you’re ready.</small><button disabled={busy || !body.trim()}>{busy ? 'Saving…' : replyTo ? 'Save reply' : 'Save note'}</button></div>
         </fieldset>

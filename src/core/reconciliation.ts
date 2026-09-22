@@ -78,11 +78,29 @@ export function mergeRecords<T extends { id: string; createdAt: string }>(left: 
 }
 
 export function mergeReviews(left: Review, right: Review): Review {
-  const { revisions: leftRevisions, comments: leftComments, ...leftMetadata } = left;
-  const { revisions: rightRevisions, comments: rightComments, ...rightMetadata } = right;
+  const { revisions: leftRevisions, comments: leftComments, changes: leftChanges, schema: leftSchema, ...leftMetadata } = left;
+  const { revisions: rightRevisions, comments: rightComments, changes: rightChanges, schema: rightSchema, ...rightMetadata } = right;
   if (canonical(leftMetadata) !== canonical(rightMetadata)) {
     throw new Error(`Sync conflict: review ${left.id} has different identity or title metadata.`);
   }
-  return reviewSchema.parse({ ...leftMetadata,
-    revisions: mergeRecords(leftRevisions, rightRevisions), comments: mergeRecords(leftComments, rightComments) });
+  const changes = mergeRecords(leftChanges ?? [], rightChanges ?? []);
+  return reviewSchema.parse({ ...leftMetadata, schema: Math.max(leftSchema, rightSchema),
+    ...(changes.length ? { changes } : {}),
+    revisions: mergeRecords(leftRevisions, rightRevisions), comments: mergeComments(leftComments, rightComments) });
+}
+
+export function mergeComments<T extends Comment>(left: T[], right: T[]): T[] {
+  const combined = new Map<string, T>();
+  for (const item of [...left, ...right]) {
+    const previous = combined.get(item.id);
+    if (!previous) { combined.set(item.id, item); continue; }
+    const { changes: a, schema: as, ...originalA } = previous;
+    const { changes: b, schema: bs, ...originalB } = item;
+    if (canonical(originalA) !== canonical(originalB)) {
+      throw new Error(`Sync conflict: record ${item.id} has different contents. Neither version was overwritten.`);
+    }
+    const changes = mergeRecords(a ?? [], b ?? []);
+    combined.set(item.id, { ...item, schema: Math.max(as, bs) as 1 | 2, ...(changes.length ? { changes } : {}) });
+  }
+  return mergeRecords(left.map(item => combined.get(item.id)!), right.map(item => combined.get(item.id)!));
 }

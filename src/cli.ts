@@ -7,6 +7,7 @@ import { Reviews } from './core/reviews.js';
 import { createServer } from './server/app.js';
 import { shortIdentifier } from './core/identifiers.js';
 import { Synchronization } from './core/sync.js';
+import { reviewTitle } from './core/changes.js';
 
 const program = new Command()
   .name('git discuss')
@@ -41,7 +42,7 @@ review.command('list').option('--json', 'Print complete reviews as JSON').action
   const rows = items.map(item => [
     shortIdentifier(item.id, ids),
     shortIdentifier(item.revisions[item.revisions.length - 1].id, item.revisions.map(revision => revision.id)),
-    String(item.revisions.length), String(item.comments.length), item.title.replace(/[\x00-\x1f\x7f-\x9f]/g, ' '),
+    String(item.revisions.length), String(item.comments.length), reviewTitle(item).replace(/[\x00-\x1f\x7f-\x9f]/g, ' '),
   ]);
   rows.unshift(['REVIEW', 'LATEST REVISION', 'REVISIONS', 'COMMENTS', 'TITLE']);
   const widths = rows[0].map((_, index) => Math.max(...rows.map(row => row[index].length)));

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { BranchChoice, Comment, Review, RevisionDiff } from '../core/models.js';
 import { api, errorMessage } from './api.js';
 import { CodeSource, ErrorNotice, SavedNotice, Thread } from './components.js';
+import { commentBody, isDeleted, recordVersion, reviewTitle } from '../core/changes.js';
 
 function DiffViewer({ reviewId, revisionId }: { reviewId: string; revisionId: string }) {
   const [diff, setDiff] = useState<RevisionDiff | null>(null);
@@ -89,6 +90,9 @@ export function ReviewsWorkspace({ syncVersion, onSaved, onShare }: {
   const [busy, setBusy] = useState(true);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  const [editingTitle, setEditingTitle] = useState(false);
+  const [titleDraft, setTitleDraft] = useState('');
+  const [titleVersion, setTitleVersion] = useState('');
 
   function remember(next: Review) {
     setReviews(current => [...current.filter(item => item.id !== next.id), next]);
@@ -101,7 +105,7 @@ export function ReviewsWorkspace({ syncVersion, onSaved, onShare }: {
       setReviews(items);
       const current = items.find(item => item.id === selectedId.current);
       if (current) setReview(current);
-      else if (selectedId.current) setError('This review is no longer available locally. Return to the review list or get team updates. Your draft is still here.');
+      else if (selectedId.current) setReview(await api<Review>(`reviews/${selectedId.current}`));
     } catch (error) { setError(errorMessage(error)); }
     finally { setBusy(false); }
   }
@@ -115,7 +119,7 @@ export function ReviewsWorkspace({ syncVersion, onSaved, onShare }: {
       if (id !== review?.id) {
         setRevisionId(next.revisions[next.revisions.length - 1].id); setBody(''); setReplyTo(null); setTab('discussion');
       }
-      remember(next); setView('review'); setAddingVersion(false);
+      remember(next); setView('review'); setAddingVersion(false); setEditingTitle(false);
     } catch (error) { setError(errorMessage(error)); }
     finally { setBusy(false); }
   }
@@ -129,6 +133,7 @@ export function ReviewsWorkspace({ syncVersion, onSaved, onShare }: {
 
   return <>
     <ErrorNotice message={error} onRetry={() => void refresh()} />
+    <SavedNotice message={notice} onShare={onShare} />
     {view === 'list' && <>
       <div className="workspace-toolbar"><h3>Your reviews <span className="count">{reviews.length}</span></h3>
         <div className="row"><button className="secondary-button" disabled={busy} onClick={() => void refresh()}>Refresh list</button>
@@ -147,14 +152,14 @@ export function ReviewsWorkspace({ syncVersion, onSaved, onShare }: {
       {reviews.length > 0 && <>
         <label className="sr-only" htmlFor="review-search">Find a review by title or author</label>
         <input className="search-input" id="review-search" placeholder="Find a review by title or author…" value={filter} onChange={event => setFilter(event.target.value)} />
-        <div className="review-list">{reviews.filter(item => `${item.title} ${item.author.name}`.toLowerCase().includes(filter.toLowerCase()))
+        <div className="review-list">{reviews.filter(item => `${reviewTitle(item)} ${item.author.name}`.toLowerCase().includes(filter.toLowerCase()))
           .sort((a, b) => b.createdAt.localeCompare(a.createdAt) || a.id.localeCompare(b.id)).map(item => <button type="button" className="review-card" key={item.id} disabled={busy} onClick={() => void openReview(item.id)}>
-            <span className="review-card-title">{item.title}<span aria-hidden="true">→</span></span>
+            <span className="review-card-title">{reviewTitle(item)}<span aria-hidden="true">→</span></span>
             <span className="review-card-meta">Started by {item.author.name} · {new Date(item.createdAt).toLocaleDateString()}</span>
             <span className="review-card-meta">{item.revisions.length} {item.revisions.length === 1 ? 'version' : 'versions'} · {item.comments.length} {item.comments.length === 1 ? 'comment' : 'comments'}</span>
             {item.id === review?.id && body && <span className="version-badge">You have draft feedback</span>}
           </button>)}</div>
-        {!reviews.some(item => `${item.title} ${item.author.name}`.toLowerCase().includes(filter.toLowerCase())) && <p className="empty">No reviews match “{filter}”. Try another title or author.</p>}
+        {!reviews.some(item => `${reviewTitle(item)} ${item.author.name}`.toLowerCase().includes(filter.toLowerCase())) && <p className="empty">No reviews match “{filter}”. Try another title or author.</p>}
       </>}
     </>}
     {view === 'create' && <VersionForm onCancel={() => setView('list')} onSave={async input => {
@@ -165,13 +170,37 @@ export function ReviewsWorkspace({ syncVersion, onSaved, onShare }: {
         setNotice('Review created on this computer.'); onSaved();
       } finally { setBusy(false); }
     }} />}
-    {view === 'review' && review && <>
+    {view === 'review' && review && isDeleted(review) && <section className="card empty"><h3>This review was deleted</h3><p>The deletion is saved in the review history and will be kept when sharing updates.</p>
+      {body && <><label htmlFor="deleted-review-draft">Your unsaved feedback is still here to copy</label><textarea id="deleted-review-draft" value={body} readOnly rows={4} /></>}
+      <button type="button" className="secondary-button" onClick={() => { setView('list'); selectedId.current = null; }}>← All reviews</button>
+    </section>}
+    {view === 'review' && review && !isDeleted(review) && <>
       <div className="workspace-toolbar"><button type="button" className="text-button" disabled={busy} onClick={() => { setView('list'); setAddingVersion(false); }}>← All reviews</button>
         <button type="button" className="secondary-button" disabled={busy} onClick={() => void refresh()}>Refresh feedback</button></div>
-      <header className="pull-request-header"><h2>{review.title}</h2>
+      <header className="pull-request-header"><h2>{reviewTitle(review)}</h2>
         <div className="review-summary"><span className="review-kind">Review</span><p><strong>{review.author.name}</strong> started this review on {new Date(review.createdAt).toLocaleDateString()} · {review.revisions.length} {review.revisions.length === 1 ? 'version' : 'versions'}</p></div>
       </header>
-      <SavedNotice message={notice} onShare={onShare} />
+      <div className="review-management"><button type="button" className="secondary-button" disabled={busy || editingTitle} onClick={() => {
+        setTitleDraft(reviewTitle(review)); setTitleVersion(recordVersion(review)); setEditingTitle(true);
+      }}>Edit title</button>
+        <button type="button" className="secondary-button danger-text" disabled={busy} onClick={() => {
+          if (!window.confirm('Delete this review and its discussion? It will disappear from the review list and the deletion will be shared with your team. Previous content remains in Git history.')) return;
+          setBusy(true); setError('');
+          void api<Review>(`reviews/${review.id}/change`, { kind: 'delete', expectedVersion: recordVersion(review) }).then(() => {
+            setReviews(current => current.filter(item => item.id !== review.id)); setReview(null); selectedId.current = null;
+            setView('list'); setBody(''); setReplyTo(null); setEditingTitle(false); setAddingVersion(false);
+            setNotice('Review deleted on this computer.'); onSaved();
+          }).catch(error => setError(errorMessage(error))).finally(() => setBusy(false));
+        }}>Delete review</button>
+      </div>
+      {editingTitle && <form className="card guided-form" onSubmit={event => {
+        event.preventDefault(); setBusy(true); setError('');
+        void api<Review>(`reviews/${review.id}/change`, { kind: 'rename', title: titleDraft, expectedVersion: titleVersion }).then(next => {
+          remember(next); setEditingTitle(false); setNotice('Review title updated on this computer.'); onSaved();
+        }).catch(error => setError(errorMessage(error))).finally(() => setBusy(false));
+      }}><label htmlFor="edit-review-title">Review title</label><input id="edit-review-title" value={titleDraft} disabled={busy} onChange={event => setTitleDraft(event.target.value)} required maxLength={256} autoFocus />
+        <div className="form-actions"><button disabled={busy || !titleDraft.trim()}>Save title</button><button type="button" className="secondary-button" disabled={busy} onClick={() => setEditingTitle(false)}>Cancel</button></div>
+      </form>}
       <div className="view-switch" role="group" aria-label="Review view">
         <button type="button" aria-pressed={tab === 'discussion'} aria-controls="review-discussion" onClick={() => setTab('discussion')}>Discussion <span className="count">{review.comments.length}</span></button>
         <button type="button" aria-pressed={tab === 'changes'} aria-controls="review-changes" onClick={() => setTab('changes')}>Code changes</button>
@@ -189,6 +218,7 @@ export function ReviewsWorkspace({ syncVersion, onSaved, onShare }: {
         </section>
         <section className="sidebar-section"><h3>About this discussion</h3><p>Feedback from all versions stays together. New comments refer to <strong>version {versionIndex + 1}</strong>.</p></section>
         <details className="technical-details"><summary>Git details & IDs</summary><dl><dt>Review ID</dt><dd><code>{review.id}</code></dd><dt>Version ID</dt><dd><code>{revisionId}</code></dd><dt>Comparison commit (base)</dt><dd><code>{version?.base}</code></dd><dt>Reviewed commit (head)</dt><dd><code>{version?.head}</code></dd></dl></details>
+        {review.changes?.length && <details className="technical-details"><summary>Title history</summary><p>Original: {review.title}</p>{review.changes.map(change => <p key={change.id}>{change.kind === 'rename' ? change.title : 'Deleted'} · {change.author.name} · {new Date(change.createdAt).toLocaleString()}</p>)}</details>}
       </aside>
       <div className="review-main">
       {addingVersion && <VersionForm review={review} onCancel={() => setAddingVersion(false)} onSave={async input => {
@@ -206,6 +236,14 @@ export function ReviewsWorkspace({ syncVersion, onSaved, onShare }: {
           <div className="section-header"><h3>Discussion</h3><span className="muted">Feedback from all versions</span></div>
           {review.comments.length === 0 && <div className="empty"><h3>What should your teammates know?</h3><p>Ask a question, explain a decision, or suggest an improvement.</p></div>}
           {review.comments.filter(item => !item.replyTo).map(comment => <Thread key={comment.id} comment={comment} comments={review.comments} versions={review.revisions} disabled={busy}
+            onChange={async (item, mutation) => {
+              setBusy(true);
+              try {
+                const next = await api<Review>(`reviews/${review.id}/comments/${item.id}/change`, mutation);
+                remember(next); if (replyTo?.id === item.id) setReplyTo(mutation.kind === 'delete' ? null : next.comments.find(comment => comment.id === item.id) ?? null);
+                setNotice(mutation.kind === 'delete' ? 'Comment deleted on this computer.' : 'Comment updated on this computer.'); onSaved();
+              } finally { setBusy(false); }
+            }}
             onReply={item => { setReplyTo(item); document.getElementById('review-body')?.focus(); }} />)}
         </section>
         <form className="card composer" onSubmit={event => {
@@ -216,7 +254,7 @@ export function ReviewsWorkspace({ syncVersion, onSaved, onShare }: {
         }}>
           <fieldset disabled={busy}><label htmlFor="review-body">{replyTo ? `Reply to ${replyTo.author.name}` : 'Add your feedback'}</label>
             <p className="field-hint">Your {replyTo ? 'reply' : 'comment'} will refer to <strong>version {versionIndex + 1}</strong>.</p>
-            {replyTo && <div className="reply-context"><p>{replyTo.body}</p><button type="button" className="text-button" onClick={() => setReplyTo(null)}>Cancel reply</button></div>}
+            {replyTo && <div className="reply-context"><p>{commentBody(replyTo)}</p><button type="button" className="text-button" onClick={() => setReplyTo(null)}>Cancel reply</button></div>}
             <textarea id="review-body" value={body} onChange={event => setBody(event.target.value)} placeholder="What works well? What could be clearer?" required maxLength={20000} rows={5} />
             <div className="composer-footer"><small>Saved here first. Share when you’re ready.</small><button disabled={busy || !body.trim()}>{busy ? 'Saving…' : replyTo ? 'Save reply' : 'Save feedback'}</button></div>
           </fieldset>

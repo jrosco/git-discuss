@@ -9,6 +9,7 @@ import { Repository } from '../src/git/repository.js';
 import { Reviews } from '../src/core/reviews.js';
 import { createServer } from '../src/server/app.js';
 import { resolveIdentifier, shortIdentifier } from '../src/core/identifiers.js';
+import { commentBody, isDeleted, recordVersion, reviewTitle } from '../src/core/changes.js';
 
 const execute = promisify(execFile);
 
@@ -43,6 +44,67 @@ test('comments and replies survive reopening without changing code history', asy
   assert.equal((await git('rev-list', '--count', 'refs/notes/git-discuss')).stdout.trim(), '4');
 });
 
+test('edits retain history, reject stale versions, and deleted comments preserve replies', async t => {
+  const { directory, engine } = await fixture();
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const note = await engine.addComment({ commit: 'HEAD', body: 'Original note' });
+  const reply = await engine.addComment({ commit: 'HEAD', body: 'Reply remains', replyTo: note.id });
+  const edited = await engine.changeCommitComment('HEAD', note.id, { kind: 'edit', body: 'Updated note', expectedVersion: note.id });
+  assert.equal(edited.comments[0].body, 'Original note');
+  assert.equal(commentBody(edited.comments[0]), 'Updated note');
+  assert.equal(edited.comments[0].schema, 2);
+  assert.equal(edited.comments[0].changes?.[0].author.name, 'Review Tester');
+  await assert.rejects(engine.changeCommitComment('HEAD', note.id, { kind: 'edit', body: 'Stale overwrite', expectedVersion: note.id }), /changed since/);
+  await assert.rejects(engine.changeCommitComment('HEAD', note.id, { kind: 'edit', body: ' ', expectedVersion: recordVersion(edited.comments[0]) }));
+  const deleted = await engine.changeCommitComment('HEAD', note.id, { kind: 'delete', expectedVersion: recordVersion(edited.comments[0]) });
+  assert.ok(isDeleted(deleted.comments[0]));
+  assert.equal(commentBody(deleted.comments[0]), 'This comment was deleted.');
+  assert.equal(deleted.comments[1].id, reply.id);
+  assert.equal(deleted.comments[1].replyTo, note.id);
+  await assert.rejects(engine.changeCommitComment('HEAD', note.id, { kind: 'edit', body: 'Restore?', expectedVersion: recordVersion(deleted.comments[0]) }), /was deleted/);
+  const reopened = new Reviews(await Repository.open(directory));
+  assert.deepEqual((await reopened.conversation('HEAD')).comments, deleted.comments);
+
+  const review = await engine.createReview({ title: 'Original title', base: 'HEAD', head: 'HEAD' });
+  const comment = await engine.addReviewComment(review.id, { body: 'Review comment' });
+  const renamed = await engine.changeReview(review.id, { kind: 'rename', title: 'Updated title', expectedVersion: review.id });
+  assert.equal(reviewTitle(renamed), 'Updated title');
+  assert.equal(renamed.title, 'Original title');
+  await assert.rejects(engine.changeReview(review.id, { kind: 'rename', title: 'Stale', expectedVersion: review.id }), /changed since/);
+  const updated = await engine.changeReviewComment(review.id, comment.id, { kind: 'edit', body: 'New reasoning', expectedVersion: comment.id });
+  assert.equal(commentBody(updated.comments[0]), 'New reasoning');
+  await assert.rejects(engine.changeReviewComment(review.id, reply.id, { kind: 'delete', expectedVersion: reply.id }), /Comment does not exist/);
+  const removed = await engine.changeReview(review.id, { kind: 'delete', expectedVersion: recordVersion(renamed) });
+  assert.ok(isDeleted(removed));
+  assert.equal((await engine.listReviews()).length, 0);
+  assert.ok(isDeleted(await reopened.review(review.id)));
+  await assert.rejects(engine.addReviewComment(review.id, { body: 'New feedback' }), /was deleted/);
+  await assert.rejects(engine.addRevision(review.id, { base: 'HEAD', head: 'HEAD' }), /was deleted/);
+});
+
+test('mutation API requires authentication and validates edits and deletion targets', async t => {
+  const { directory, engine } = await fixture();
+  const { app, token } = await createServer(engine);
+  t.after(async () => { await app.close(); await rm(directory, { recursive: true, force: true }); });
+  const address = await app.listen({ host: '127.0.0.1', port: 0 });
+  const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
+  const review = await engine.createReview({ title: 'API edit', base: 'HEAD', head: 'HEAD' });
+  const comment = await engine.addReviewComment(review.id, { body: 'Before' });
+  const endpoint = `${address}/api/reviews/${review.id}/comments/${comment.id}/change`;
+  const body = JSON.stringify({ kind: 'edit', body: 'After', expectedVersion: comment.id });
+  assert.equal((await fetch(endpoint, { method: 'POST', body })).status, 401);
+  assert.equal((await fetch(endpoint, { method: 'POST', headers: { ...headers, Origin: 'https://example.test' }, body })).status, 403);
+  assert.equal((await fetch(endpoint, { method: 'POST', headers, body })).status, 200);
+  assert.equal((await fetch(endpoint, { method: 'POST', headers, body })).status, 400);
+  assert.equal((await fetch(`${address}/api/reviews/${review.id}/change`, { method: 'POST', headers,
+    body: JSON.stringify({ kind: 'delete', expectedVersion: review.id }) })).status, 200);
+  assert.deepEqual(await (await fetch(`${address}/api/reviews`, { headers })).json(), []);
+  const note = await engine.addComment({ commit: 'HEAD', body: 'Note to delete' });
+  assert.equal((await fetch(`${address}/api/commits/${note.commit}/comments/${note.id}/change`, { method: 'POST', headers,
+    body: JSON.stringify({ kind: 'delete', expectedVersion: note.id }) })).status, 200);
+  assert.ok(isDeleted((await engine.conversation('HEAD')).comments[0]));
+});
+
 test('validates replies and input; lock blocks concurrent writers and releases after failure', async t => {
   const { directory, engine } = await fixture();
   t.after(() => rm(directory, { recursive: true, force: true }));
@@ -63,6 +125,30 @@ test('comments remain anchored to original commit after branch advances', async 
   await git('-c', 'commit.gpgsign=false', 'commit', '--allow-empty', '-m', 'Next revision');
   assert.equal((await engine.conversation('HEAD')).comments.length, 0);
   assert.equal((await engine.conversation(comment.commit)).comments[0].id, comment.id);
+});
+
+test('commit note counts include replies, exclude deletions, and isolate each commit from review comments', async t => {
+  const { directory, git, engine } = await fixture();
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const original = await engine.repository.resolve('HEAD');
+  assert.equal((await engine.repository.commits()).commits[0].noteCount, 0);
+  const note = await engine.addComment({ commit: original, body: 'Question' });
+  const reply = await engine.addComment({ commit: original, body: 'Answer', replyTo: note.id });
+  await git('-c', 'commit.gpgsign=false', 'commit', '--allow-empty', '-m', 'Another change');
+  const next = await engine.repository.resolve('HEAD');
+  const review = await engine.createReview({ title: 'Independent review', base: original, head: next });
+  await engine.addReviewComment(review.id, { body: 'Not a commit note' });
+  assert.equal((await engine.repository.commits({ limit: 1 })).commits[0].noteCount, 0);
+  assert.equal((await engine.repository.commits({ offset: 1 })).commits[0].noteCount, 2);
+  const edited = await engine.changeCommitComment(original, note.id, { kind: 'edit', expectedVersion: note.id, body: 'Edited question' });
+  assert.deepEqual(await engine.repository.noteCounts([original, next]), { [original]: 2, [next]: 0 });
+  await engine.changeCommitComment(original, note.id, { kind: 'delete', expectedVersion: recordVersion(edited.comments[0]) });
+  assert.equal((await engine.repository.commits({ ref: original })).commits[0].noteCount, 1);
+  await engine.changeCommitComment(original, reply.id, { kind: 'delete', expectedVersion: reply.id });
+  assert.equal((await engine.repository.noteCounts([original]))[original], 0);
+  await engine.repository.writeNote(next, 'Not a structured discussion');
+  assert.deepEqual(await engine.repository.noteCounts([original, next]), { [original]: 0, [next]: null });
+  assert.equal((await engine.repository.commits({ limit: 1 })).commits[0].noteCount, null);
 });
 
 test('branch and commit browsing excludes metadata, supports stable pages, and handles detached HEAD', async t => {
@@ -119,9 +205,12 @@ test('HTTP API authenticates, restricts origins, validates writes, and persists 
   assert.equal((await branchResponse.json() as { current: boolean }[])[0].current, true);
   const commitResponse = await fetch(`${address}/api/commits?ref=HEAD&limit=1`, { headers });
   assert.equal(commitResponse.status, 200);
-  const commits = await commitResponse.json() as { commits: { subject: string }[]; nextOffset: number | null };
+  const commits = await commitResponse.json() as { commits: { subject: string; noteCount: number }[]; nextOffset: number | null };
   assert.equal(commits.commits[0].subject, 'Initial revision');
   assert.equal(commits.nextOffset, null);
+  assert.equal(commits.commits[0].noteCount, 0);
+  assert.equal((await fetch(`${address}/api/note-counts`, { method: 'POST', body: '{}' })).status, 401);
+  assert.equal((await fetch(`${address}/api/note-counts`, { method: 'POST', headers, body: JSON.stringify({ commits: ['HEAD'] }) })).status, 400);
   for (const query of ['limit=101', 'offset=-1', 'offset=1.5', 'offset=nope', 'ref=--all', 'ref=missing-branch']) {
     assert.equal((await fetch(`${address}/api/commits?${query}`, { headers })).status, 400);
   }
@@ -133,6 +222,10 @@ test('HTTP API authenticates, restricts origins, validates writes, and persists 
   assert.equal(invalid.status, 400);
   const post = await fetch(`${address}/api/comments`, { method: 'POST', headers, body: JSON.stringify({ commit: 'HEAD', body: 'From the browser' }) });
   assert.equal(post.status, 201);
+  const currentCommit = await engine.repository.resolve('HEAD');
+  const countsResponse = await fetch(`${address}/api/note-counts`, { method: 'POST', headers, body: JSON.stringify({ commits: [currentCommit] }) });
+  assert.equal(countsResponse.status, 200);
+  assert.deepEqual(await countsResponse.json(), { [currentCommit]: 1 });
   const response = await fetch(`${address}/api/conversation?commit=HEAD`, { headers });
   assert.equal(response.status, 200);
   const data = await response.json() as { comments: { body: string }[] };

@@ -10,6 +10,7 @@ import { Reviews } from '../src/core/reviews.js';
 import { Synchronization } from '../src/core/sync.js';
 import { canonical, mergeReviews } from '../src/core/reconciliation.js';
 import { createServer } from '../src/server/app.js';
+import { commentBody, isDeleted, recordVersion, reviewTitle } from '../src/core/changes.js';
 
 const execute = promisify(execFile);
 
@@ -185,4 +186,44 @@ test('sync API authenticates requests and shares both discussion stores through 
   await sb.sync();
   assert.equal((await b.conversation('HEAD')).comments[0].body, 'API shared note');
   assert.equal((await b.review(review.id)).id, review.id);
+});
+
+test('concurrent edits converge, deleted comments preserve replies, and deleted reviews never resurrect', async t => {
+  const { a, b, sa, sb } = await fixture(t);
+  const note = await a.addComment({ commit: 'HEAD', body: 'Original note' });
+  await a.addComment({ commit: 'HEAD', body: 'Reply survives', replyTo: note.id });
+  const review = await a.createReview({ title: 'Original review', base: 'HEAD', head: 'HEAD' });
+  const comment = await a.addReviewComment(review.id, { body: 'Original review comment' });
+  await sa.sync(); await sb.sync();
+  await a.changeCommitComment('HEAD', note.id, { kind: 'edit', body: 'Alice edit', expectedVersion: note.id });
+  await b.changeCommitComment('HEAD', note.id, { kind: 'edit', body: 'Bob edit', expectedVersion: note.id });
+  await a.changeReview(review.id, { kind: 'rename', title: 'Alice title', expectedVersion: review.id });
+  await b.changeReview(review.id, { kind: 'rename', title: 'Bob title', expectedVersion: review.id });
+  await a.changeReviewComment(review.id, comment.id, { kind: 'delete', expectedVersion: comment.id });
+  await b.changeReviewComment(review.id, comment.id, { kind: 'edit', body: 'Concurrent with deletion', expectedVersion: comment.id });
+  await sa.sync(); await sb.sync(); await sa.sync();
+  const left = await a.review(review.id);
+  const right = await b.review(review.id);
+  assert.deepEqual(left, right);
+  assert.equal(left.changes?.length, 2);
+  assert.equal(reviewTitle(left), reviewTitle(right));
+  assert.ok(isDeleted(left.comments[0]));
+  assert.equal(left.comments[0].changes?.length, 2);
+  const mergedNote = (await a.conversation('HEAD')).comments[0];
+  assert.equal(mergedNote.changes?.length, 2);
+  assert.equal(commentBody(mergedNote), commentBody((await b.conversation('HEAD')).comments[0]));
+  await a.changeCommitComment('HEAD', note.id, { kind: 'delete', expectedVersion: recordVersion(mergedNote) });
+  await a.changeReview(review.id, { kind: 'delete', expectedVersion: recordVersion(left) });
+  await b.addReviewComment(review.id, { body: 'Offline feedback while Alice deletes' });
+  await sa.sync(); await sb.sync(); await sa.sync();
+  assert.deepEqual(await a.listReviews(), []);
+  assert.deepEqual(await b.listReviews(), []);
+  const tombstone = await b.review(review.id);
+  assert.ok(isDeleted(tombstone));
+  assert.equal(tombstone.comments.length, 2);
+  const notes = (await b.conversation('HEAD')).comments;
+  assert.ok(isDeleted(notes[0]));
+  assert.equal(notes[1].replyTo, note.id);
+  assert.equal(notes[1].body, 'Reply survives');
+  assert.equal((await sb.sync()).uploaded, 0);
 });
