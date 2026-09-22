@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 import type { BranchChoice, Comment, Review, RevisionDiff, SyncResult } from '../core/models.js';
 import { api, errorMessage } from './api.js';
 import { CodeSource, CommentSubmitActions, ErrorNotice, SavedButUnshared, SavedNotice, Thread, UpdatesNotice, useEditingGuard } from './components.js';
@@ -75,8 +76,8 @@ function VersionForm({ review, onSave, onCancel }: {
   </form>;
 }
 
-export function ReviewsWorkspace({ syncVersion, backgroundRevision, sharing, onSaved, onShare }: {
-  syncVersion: number; backgroundRevision: number; sharing: ComposerSharing; onSaved: () => void; onShare: () => void;
+export function ReviewsWorkspace({ syncVersion, backgroundRevision, sharing, sidebarTarget, onSaved, onShare }: {
+  syncVersion: number; backgroundRevision: number; sharing: ComposerSharing; sidebarTarget: HTMLElement | null; onSaved: () => void; onShare: () => void;
 }) {
   const [reviews, setReviews] = useState<Review[]>([]);
   const [review, setReview] = useState<Review | null>(null);
@@ -162,6 +163,7 @@ export function ReviewsWorkspace({ syncVersion, backgroundRevision, sharing, onS
   const versionIndex = review?.revisions.findIndex(item => item.id === revisionId) ?? -1;
   const version = review?.revisions[versionIndex];
   const latest = review?.revisions[review.revisions.length - 1];
+  const placeDetails = (content: ReactNode) => sidebarTarget ? createPortal(content, sidebarTarget) : content;
 
   return <>
     <UpdatesNotice available={backgroundRevision > seenRevision || deferredRefresh} editing={hasEdits} busy={busy} onShow={() => void refresh()} />
@@ -239,20 +241,22 @@ export function ReviewsWorkspace({ syncVersion, backgroundRevision, sharing, onS
         <button type="button" aria-pressed={tab === 'changes'} aria-controls="review-changes" onClick={() => setTab('changes')}>Code changes</button>
       </div>
       <div className="pull-request-layout">
-      <aside className="review-sidebar" aria-label="Review details">
+      {placeDetails(<aside className="review-sidebar" aria-label="Review details">
         <section className="version-picker" aria-label="Review version">
           <label htmlFor="review-version">Which version are you reviewing?</label>
           <select id="review-version" value={revisionId} disabled={busy || addingVersion} onChange={event => chooseVersion(event.target.value)}>
             {review.revisions.map((item, index) => <option key={item.id} value={item.id}>Version {index + 1}{index === review.revisions.length - 1 ? ' · latest' : ''}</option>)}
           </select>
           {version && <p className="field-hint">Saved by {version.author.name}<br />{new Date(version.createdAt).toLocaleDateString()}</p>}
-          <button type="button" className="secondary-button" disabled={busy || addingVersion} onClick={() => setAddingVersion(true)}>Add updated code</button>
+          <button type="button" className="secondary-button" disabled={busy || addingVersion} onClick={() => {
+            setAddingVersion(true); requestAnimationFrame(() => document.getElementById('review-head')?.focus());
+          }}>Add updated code</button>
           {latest && latest.id !== revisionId && <div className="inline-hint">You’re looking at an earlier version. <button type="button" className="text-button" disabled={busy || addingVersion} onClick={() => chooseVersion(latest.id)}>View latest version</button></div>}
         </section>
         <section className="sidebar-section"><h3>About this discussion</h3><p>Feedback from all versions stays together. New comments refer to <strong>version {versionIndex + 1}</strong>.</p></section>
         <details className="technical-details"><summary>Git details & IDs</summary><dl><dt>Review ID</dt><dd><code>{review.id}</code></dd><dt>Version ID</dt><dd><code>{revisionId}</code></dd><dt>Comparison commit (base)</dt><dd><code>{version?.base}</code></dd><dt>Reviewed commit (head)</dt><dd><code>{version?.head}</code></dd></dl></details>
         {review.changes?.length && <details className="technical-details"><summary>Title history</summary><p>Original: {review.title}</p>{review.changes.map(change => <p key={change.id}>{change.kind === 'rename' ? change.title : 'Deleted'} · {change.author.name} · {new Date(change.createdAt).toLocaleString()}</p>)}</details>}
-      </aside>
+      </aside>)}
       <div className="review-main">
       {addingVersion && <VersionForm review={review} onCancel={() => setAddingVersion(false)} onSave={async input => {
         setBusy(true);

@@ -98,7 +98,7 @@ The review ID is positional; `--revision` is optional and may only appear once. 
 
 The browser opens in **Reviews**, with a compact review list and a **Start a review** button. You can find a review by title or author, see its version/comment counts, and open it without entering any IDs. The first-use screen explains the three steps: choose changes, leave feedback, and share with the team.
 
-The interface uses a simple GitHub pull-request-inspired layout: light or dark colors, project navigation, a prominent review title, underlined **Discussion** / **Code changes** controls, and bordered comment threads. On desktop, a small right-hand sidebar holds the selected version and Git details; on smaller screens, those controls appear above the discussion. The green **Review** label identifies the type of discussion, not an approval or merge status.
+The interface uses a simple GitHub pull-request-inspired layout: light or dark colors, project navigation, a prominent review title, underlined **Discussion** / **Code changes** controls, and bordered comment threads. On desktop, one right-hand sidebar holds **Share with your team**, sharing settings, update status, and the selected review's version/Git details. On smaller screens, the sidebar appears below the main content. Links such as **Go to sharing** take you directly to it. The green **Review** label identifies the type of discussion, not an approval or merge status.
 
 Use the **Light / Dark** button in the header to switch appearance. The first visit uses your system preference; choosing a mode saves it in browser storage for that server address. A different launch port has separate browser storage (use a fixed `--port` if you want the same address across launches). Switching themes keeps your drafts and selections. If browser storage is blocked, the toggle still works for the current page.
 
@@ -159,7 +159,7 @@ The picker loads 50 commits at a time. **Show older changes** continues from the
 
 New comment and reply forms in both **Reviews** and **Change notes** offer two actions:
 
-- **Save locally** stores the feedback in Git on this computer. Later, use **Share & get updates** at the top of the page to submit your saved work together.
+- **Save locally** stores the feedback in Git on this computer. Later, use **Share & get updates** in the sharing sidebar to submit your saved work together.
 - **Save & share now** saves the comment or reply, then runs the existing sync action using the **Team repository** selected in Sharing settings. This also shares **all other locally saved review discussions and change notes**, not just the new comment. It is disabled until a team repository is available.
 
 Locally saved comments are not a private pending-review batch: any later share includes them. Unsubmitted text still in a text area is a draft and is never uploaded. Submitting a form without selecting the share action defaults to saving locally.

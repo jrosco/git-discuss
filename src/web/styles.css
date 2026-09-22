@@ -87,7 +87,15 @@ details p { font-size: 13px; }
 .updates-notice { min-height: 68px; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 14px; margin: 0 0 16px; border: 1px solid var(--info-border); border-radius: 6px; background: var(--info-bg); font-size: 13px; }
 .updates-notice small { display: block; }
 .updates-notice button { flex-shrink: 0; }
-.workspace-layout { display: block; }
+.workspace-layout { display: grid; grid-template-columns: minmax(0, 1fr) 290px; gap: 24px 32px; align-items: start; }
+.workspace-layout > .workspace-nav { grid-column: 1 / -1; margin-bottom: 0; }
+.workspace-content { grid-column: 1; }
+.sharing-sidebar { grid-column: 2; grid-row: 2; min-width: 0; overflow-wrap: anywhere; }
+.sharing-sidebar .sharing-panel { padding: 0 0 20px; margin: 0; background: transparent; border: 0; border-radius: 0; }
+.sharing-sidebar .sharing-main, .sharing-sidebar .sharing-settings .row { flex-direction: column; align-items: stretch; }
+.sharing-sidebar .sharing-main > button, .sharing-sidebar .sharing-settings select { width: 100%; }
+.sharing-sidebar .sharing-settings .row select { flex: auto; }
+.sharing-sidebar .review-sidebar { border-top: 1px solid var(--border); padding-top: 20px; }
 .workspace-nav { display: flex; flex-wrap: wrap; align-items: start; gap: 4px; border-bottom: 1px solid var(--border); margin-bottom: 24px; }
 .workspace-nav > button { position: relative; padding: 12px 18px; border: 0; border-radius: 6px 6px 0 0; color: var(--fg); background: transparent; box-shadow: none; }
 .workspace-nav > button:hover { background: var(--subtle); }
@@ -142,7 +150,7 @@ details p { font-size: 13px; }
 .review-summary { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
 .review-summary p { color: var(--muted); font-size: 14px; margin: 0; }
 .review-kind { display: inline-block; background: var(--primary); color: #fff; border-radius: 20px; padding: 5px 13px; font-size: 13px; font-weight: 600; }
-.pull-request-layout { display: grid; grid-template-columns: minmax(0, 1fr) 250px; grid-template-areas: 'content sidebar'; gap: 32px; align-items: start; }
+.pull-request-layout { display: block; }
 .review-main { grid-area: content; min-width: 0; }
 .review-sidebar { grid-area: sidebar; min-width: 0; color: var(--muted); }
 .version-picker { padding-bottom: 20px; border-bottom: 1px solid var(--border); }
@@ -225,7 +233,8 @@ details p { font-size: 13px; }
 .commit-history-footer { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 12px; }
 footer { text-align: center; margin-top: 40px; padding-top: 20px; border-top: 1px solid var(--border); color: var(--muted); font-size: 12px; line-height: 1.6; }
 @media (max-width: 850px) {
-  .pull-request-layout { grid-template-columns: minmax(0, 1fr); grid-template-areas: 'sidebar' 'content'; gap: 24px; }
+  .workspace-layout { grid-template-columns: minmax(0, 1fr); }
+  .sharing-sidebar { grid-column: 1; grid-row: auto; border-top: 1px solid var(--border); padding-top: 24px; }
   .review-sidebar { border: 1px solid var(--border); border-radius: 6px; padding: 16px; background: var(--subtle); }
   .sidebar-section { display: none; }
   .version-picker { border: 0; padding: 0; }

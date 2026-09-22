@@ -34,6 +34,7 @@ function App() {
   const [sharingRemote, setSharingRemote] = useState('');
   const [shareSuccessVersion, setShareSuccessVersion] = useState(0);
   const [immediateShareResult, setImmediateShareResult] = useState<SyncResult | null>(null);
+  const [reviewDetailsTarget, setReviewDetailsTarget] = useState<HTMLDivElement | null>(null);
   const composerSharing: ComposerSharing = {
     remote: sharingRemote, successVersion: shareSuccessVersion,
     onSharing: active => { setSyncing(active); if (active) setImmediateShareResult(null); },
@@ -88,10 +89,6 @@ function App() {
       {repository && <details><summary>Project location</summary><code>{repository.root}</code></details>}
     </div>
     <ErrorNotice message={error} onRetry={() => void connect()} />
-    {repository && <div id="sharing-area" tabIndex={-1}><SharingPanel busy={syncing} localChanges={localChanges} onBusy={setSyncing} onBackgroundRevision={setBackgroundRevision}
-      onRemoteChange={setSharingRemote} externalResult={immediateShareResult} onFinished={success => {
-      setSyncVersion(version => version + 1); if (success) { setLocalChanges(false); setShareSuccessVersion(version => version + 1); }
-    }} /></div>}
     <div className="workspace-layout">
       <nav className="workspace-nav" aria-label="Discussion workspaces">
         <div className="sr-only">Discussion workspaces</div>
@@ -113,7 +110,7 @@ function App() {
         <section id="reviews-workspace" aria-labelledby="reviews-heading" hidden={workspace !== 'reviews'}>
           <header className="workspace-heading"><div className="eyebrow">DISCUSS WORK IN PROGRESS</div><h2 id="reviews-heading">Reviews</h2>
             <p>Choose changes, ask for feedback, and keep the conversation together as you update your code.</p></header>
-          {repository && <ReviewsWorkspace syncVersion={syncVersion} backgroundRevision={backgroundRevision} sharing={composerSharing} onSaved={() => setLocalChanges(true)} onShare={showSharing} />}
+          {repository && <ReviewsWorkspace syncVersion={syncVersion} backgroundRevision={backgroundRevision} sharing={composerSharing} sidebarTarget={reviewDetailsTarget} onSaved={() => setLocalChanges(true)} onShare={showSharing} />}
         </section>
         <section id="notes-workspace" aria-labelledby="notes-heading" hidden={workspace !== 'notes'}>
           <header className="workspace-heading"><div className="eyebrow">CAPTURE CONTEXT FOR ONE CHANGE</div><h2 id="notes-heading">Change notes</h2>
@@ -121,6 +118,16 @@ function App() {
           {repository && <CommitNotesWorkspace initialCommit={repository.initialCommit} syncVersion={syncVersion} backgroundRevision={backgroundRevision} sharing={composerSharing} onSaved={() => setLocalChanges(true)} onShare={showSharing} />}
         </section>
       </fieldset>
+      {repository && <aside className="sharing-sidebar" aria-label="Team sharing and review details">
+        <div id="sharing-area" tabIndex={-1}><SharingPanel busy={syncing} localChanges={localChanges} onBusy={setSyncing} onBackgroundRevision={setBackgroundRevision}
+          onRemoteChange={setSharingRemote} externalResult={immediateShareResult} onFinished={success => {
+          setSyncVersion(version => version + 1); if (success) { setLocalChanges(false); setShareSuccessVersion(version => version + 1); }
+        }} /></div>
+        <fieldset disabled={syncing} hidden={workspace !== 'reviews'} className="review-sidebar-controls">
+          <legend className="sr-only">Review version and details</legend>
+          <div ref={setReviewDetailsTarget} />
+        </fieldset>
+      </aside>}
     </div>
     <footer>Feedback saves on this computer first. Choose <strong>Share & get updates</strong> when you’re ready to exchange it with your team.</footer>
   </main>;
