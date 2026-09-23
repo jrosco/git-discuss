@@ -269,6 +269,8 @@ Writers hold the repository-wide application lock and publish the snapshot with 
 
 This version stores a plain-text/Markdown blob on each annotated commit at `refs/notes/git-discuss`. Add, edit, append, and delete rewrite the current notes tree under the application lock, with previous versions retained in Git's notes commit history. Note blob IDs provide optimistic edit/delete version checks. Local-only notes do not guarantee retention of their annotated code after history rewriting. Sync snapshots add code-retention parent links before sharing notes. Read the current text with `git notes --ref=git-discuss show <commit>` and its history with `git log --first-parent refs/notes/git-discuss`.
 
+In **Change notes**, expand **Git details** to see the code commit's author and committer (including email addresses), authored and committed timestamps with UTC offsets, and full commit, tree, and parent SHAs. The separate **Note storage** section shows the notes ref and current note blob SHA. Code author metadata is not the author of the note; note authorship is recorded in the notes ref's Git history.
+
 ### Boundaries
 
 - Branch names resolve to exact commits. New commits, rebases, and squash merges do not automatically carry discussion forward.

@@ -389,7 +389,26 @@ export function CommitNotesWorkspace({ initialCommit, syncVersion, backgroundRev
         <div className="eyebrow">NOTES FOR THIS SAVED CHANGE</div>
         <h3>{conversation.subject || 'Untitled change'}</h3>
         <p>These notes stay with this exact code snapshot.</p>
-        <details className="technical-details"><summary>Git details</summary><p>Commit ID: <code>{conversation.commit}</code></p><p>Storage: <code>refs/notes/git-discuss</code></p></details>
+        <details className="technical-details"><summary>Git details</summary>
+          <h4>Code commit</h4>
+          <dl>
+            <dt>Commit SHA</dt><dd><code>{conversation.commit}</code></dd>
+            <dt>Author</dt><dd>{conversation.commitDetails.author.name} &lt;{conversation.commitDetails.author.email}&gt;</dd>
+            <dt>Authored at</dt><dd><time dateTime={conversation.commitDetails.authoredAt}>{conversation.commitDetails.authoredAt}</time></dd>
+            <dt>Committer</dt><dd>{conversation.commitDetails.committer.name} &lt;{conversation.commitDetails.committer.email}&gt;</dd>
+            <dt>Committed at</dt><dd><time dateTime={conversation.commitDetails.committedAt}>{conversation.commitDetails.committedAt}</time></dd>
+            <dt>Tree SHA</dt><dd><code>{conversation.commitDetails.tree}</code></dd>
+            <dt>Parent SHAs</dt><dd>{conversation.commitDetails.parents.length
+              ? conversation.commitDetails.parents.map(parent => <div key={parent}><code>{parent}</code></div>)
+              : 'None — this is a root commit'}</dd>
+          </dl>
+          <h4>Note storage</h4>
+          <dl>
+            <dt>Notes ref</dt><dd><code>refs/notes/git-discuss</code></dd>
+            <dt>Note blob SHA</dt><dd>{conversation.noteVersion ? <code>{conversation.noteVersion}</code> : 'No note saved for this commit'}</dd>
+          </dl>
+          <p className="field-hint">Author and committer details describe the code commit. Timestamps include their UTC offsets. The note blob SHA identifies the currently saved note text.</p>
+        </details>
       </header>
       <section className="card discussion" aria-label="Commit notes for this change">
         <div className="section-header"><h3>Note</h3>

@@ -35,12 +35,22 @@ export const addCommentSchema = z.object({
 
 export type Comment = z.infer<typeof commentSchema>;
 export type AddComment = z.input<typeof addCommentSchema>;
+export interface CommitDetails {
+  author: { name: string; email: string };
+  authoredAt: string;
+  committer: { name: string; email: string };
+  committedAt: string;
+  tree: string;
+  parents: string[];
+}
+
 export interface Conversation {
   commit: string;
   subject: string;
   comments: Comment[];
   note: string | null;
   noteVersion: string | null;
+  commitDetails: CommitDetails;
 }
 
 export interface SavedCommitNote {

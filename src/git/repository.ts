@@ -2,7 +2,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { mkdir, rmdir } from 'node:fs/promises';
 import path from 'node:path';
-import { commitListInputSchema, noteCountsInputSchema, type BranchChoice, type CommitPage, type NoteCounts } from '../core/models.js';
+import { commitListInputSchema, noteCountsInputSchema, type BranchChoice, type CommitPage, type CommitDetails, type NoteCounts } from '../core/models.js';
 
 const execute = promisify(execFile);
 export const NOTES_REF = 'refs/notes/git-discuss';
@@ -157,6 +157,17 @@ export class Repository {
 
   async readNote(commit: string): Promise<string | null> {
     return (await this.noteSnapshot(commit)).note;
+  }
+
+  async commitDetails(commit: string): Promise<CommitDetails> {
+    const output = await this.git('show', '-s', '--no-show-signature', '--no-notes',
+      '--format=%T%x00%P%x00%an%x00%ae%x00%aI%x00%cn%x00%ce%x00%cI', commit, '--');
+    const [tree, parents, authorName, authorEmail, authoredAt, committerName, committerEmail, committedAt] = output.split('\0');
+    return {
+      tree, parents: parents ? parents.split(' ') : [],
+      author: { name: authorName, email: authorEmail }, authoredAt,
+      committer: { name: committerName, email: committerEmail }, committedAt,
+    };
   }
 
   async noteSnapshot(commit: string): Promise<{ note: string | null; noteVersion: string | null }> {

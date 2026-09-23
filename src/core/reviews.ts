@@ -169,6 +169,7 @@ export class Reviews {
     return {
       commit,
       subject: await this.repository.git('show', '-s', '--format=%s', commit, '--'),
+      commitDetails: await this.repository.commitDetails(commit),
       comments: [],
       ...snapshot,
     };

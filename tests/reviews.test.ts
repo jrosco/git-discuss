@@ -13,6 +13,36 @@ import { commentBody, isDeleted, recordVersion, reviewTitle } from '../src/core/
 
 const execute = promisify(execFile);
 
+test('Git details include code identities, original timestamps, and all parent SHAs independently of note authors', async t => {
+  const { directory, engine } = await fixture();
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const initial = await engine.conversation('HEAD');
+  assert.deepEqual(initial.commitDetails.parents, []);
+  assert.equal(initial.commitDetails.author.name, 'Review Tester');
+  const tree = initial.commitDetails.tree;
+  const side = await engine.repository.gitInput('Side commit', 'commit-tree', tree, '-p', initial.commit);
+  const authoredAt = '2020-01-02T03:04:05+02:30';
+  const committedAt = '2021-02-03T04:05:06-04:00';
+  const { stdout } = await execute('git', ['-C', directory, '-c', 'commit.gpgsign=false', 'commit-tree', tree,
+    '-p', initial.commit, '-p', side, '-m', 'Merged code'], { env: { ...process.env,
+    GIT_AUTHOR_NAME: 'Code Author', GIT_AUTHOR_EMAIL: 'author@example.test', GIT_AUTHOR_DATE: authoredAt,
+    GIT_COMMITTER_NAME: 'Integrator', GIT_COMMITTER_EMAIL: 'integrator@example.test', GIT_COMMITTER_DATE: committedAt,
+  } });
+  const commit = stdout.trim();
+  const before = await engine.conversation(commit);
+  assert.deepEqual(before.commitDetails, {
+    tree, parents: [initial.commit, side],
+    author: { name: 'Code Author', email: 'author@example.test' }, authoredAt,
+    committer: { name: 'Integrator', email: 'integrator@example.test' }, committedAt,
+  });
+  assert.equal(before.noteVersion, null);
+  const saved = await engine.addComment({ commit, body: 'Note from a different person' });
+  const after = await engine.conversation(commit);
+  assert.equal(saved.author.name, 'Review Tester');
+  assert.deepEqual(after.commitDetails, before.commitDetails);
+  assert.equal(after.noteVersion, await engine.repository.git('notes', '--ref=git-discuss', 'list', commit));
+});
+
 test('raw notes preserve Markdown whitespace and reject stale or unversioned replacement', async t => {
   const { directory, engine } = await fixture();
   t.after(() => rm(directory, { recursive: true, force: true }));
