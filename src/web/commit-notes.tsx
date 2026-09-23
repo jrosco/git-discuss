@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { BackgroundUpdateStatus, BranchChoice, Comment, CommitPage, Conversation, NoteCounts, SyncResult } from '../core/models.js';
 import { api, errorMessage } from './api.js';
 import { BranchOptions, CommentSubmitActions, ErrorNotice, SavedButUnshared, SavedNotice, UpdatesNotice } from './components.js';
+import { MarkdownEditor, MarkdownPreview } from './markdown.js';
 import { submitFeedback, type ComposerSharing } from './submission.js';
 
 function ChangePicker({ initialCommit, conversation, syncVersion, backgroundRevision, busy, onLoad }: {
@@ -219,8 +220,8 @@ export function CommitNotesWorkspace({ initialCommit, syncVersion, backgroundRev
       <section className="card discussion" aria-label="Commit notes for this change">
         <div className="section-header"><h3>Note</h3>
           <button type="button" className="text-button" disabled={busy} onClick={() => void refresh()}>Refresh notes</button></div>
-        {!conversation.note && <div className="empty"><h3>No note yet</h3><p>Add a plain Git note for this saved change.</p></div>}
-        {conversation.note && <pre className="diff-patch" aria-label="Current commit note"><code>{conversation.note}</code></pre>}
+        {!conversation.note && <div className="empty"><h3>No note yet</h3><p>Add a note for this saved change.</p></div>}
+        {conversation.note && <MarkdownPreview value={conversation.note} className="card-markdown" />}
         {!conversation.note && <div className="form-actions"><button type="button" className="secondary-button" disabled={busy} onClick={() => {
           setMode('add'); setNoteBody(''); requestAnimationFrame(() => document.getElementById('note-body')?.focus());
         }}>Add note</button></div>}
@@ -240,8 +241,10 @@ export function CommitNotesWorkspace({ initialCommit, syncVersion, backgroundRev
         const submitter = (event.nativeEvent as SubmitEvent).submitter as HTMLButtonElement | null;
         void submitNote(submitter?.value === 'share');
       }}>
-        <fieldset disabled={busy}><label htmlFor="note-body">{mode === 'add' ? 'Add note text' : mode === 'append' ? 'Append note text' : 'Edit note text'}</label>
-          <textarea id="note-body" value={noteBody} onChange={event => setNoteBody(event.target.value)} placeholder={mode === 'append' ? 'Write text to append to the current note' : 'Write plain note text for this commit'} maxLength={20000} rows={6} />
+        <fieldset disabled={busy}><MarkdownEditor id="note-body" value={noteBody} onChange={setNoteBody}
+          label={mode === 'add' ? 'Add note text' : mode === 'append' ? 'Append note text' : 'Edit note text'}
+          placeholder={mode === 'append' ? 'Write text to append to the current note' : 'Write note text for this commit'}
+          maxLength={20000} rows={6} required hint="Markdown supported: bold, italic, links, code blocks, and emoji." />
           <CommentSubmitActions busy={busy} sharingNow={sharingNow} canSave={canSave} remote={sharing.remote} onChooseRemote={onShare} />
         </fieldset>
       </form>}

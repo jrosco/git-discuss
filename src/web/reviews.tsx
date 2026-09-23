@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import type { BackgroundUpdateStatus, BranchChoice, Comment, Review, RevisionDiff, SyncResult } from '../core/models.js';
 import { api, errorMessage } from './api.js';
 import { CodeSource, CommentSubmitActions, ErrorNotice, SavedButUnshared, SavedNotice, Thread, UpdatesNotice, useEditingGuard } from './components.js';
+import { MarkdownEditor, MarkdownPreview } from './markdown.js';
 import { submitFeedback, type ComposerSharing } from './submission.js';
 import { commentBody, isDeleted, recordVersion, reviewTitle } from '../core/changes.js';
 
@@ -313,10 +314,12 @@ export function ReviewsWorkspace({ syncVersion, backgroundRevision, backgroundSu
           const submitter = (event.nativeEvent as SubmitEvent).submitter as HTMLButtonElement | null;
           void submitComment(submitter?.value === 'share');
         }}>
-          <fieldset disabled={busy}><label htmlFor="review-body">{replyTo ? `Reply to ${replyTo.author.name}` : 'Add your feedback'}</label>
+          <fieldset disabled={busy}>
             <p className="field-hint">Your {replyTo ? 'reply' : 'comment'} will refer to <strong>version {versionIndex + 1}</strong>.</p>
-            {replyTo && <div className="reply-context"><p>{commentBody(replyTo)}</p><button type="button" className="text-button" onClick={() => setReplyTo(null)}>Cancel reply</button></div>}
-            <textarea id="review-body" value={body} onChange={event => setBody(event.target.value)} placeholder="What works well? What could be clearer?" required maxLength={20000} rows={5} />
+            {replyTo && <div className="reply-context"><MarkdownPreview value={commentBody(replyTo)} /><button type="button" className="text-button" onClick={() => setReplyTo(null)}>Cancel reply</button></div>}
+            <MarkdownEditor id="review-body" label={replyTo ? `Reply to ${replyTo.author.name}` : 'Add your feedback'}
+              value={body} onChange={setBody} placeholder="What works well? What could be clearer?"
+              required maxLength={20000} rows={5} hint="Markdown supported: bold, italic, links, code blocks, and emoji." />
             <CommentSubmitActions busy={busy} sharingNow={sharingNow} canSave={Boolean(body.trim())} remote={sharing.remote} onChooseRemote={onShare} />
           </fieldset>
         </form>

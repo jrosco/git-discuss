@@ -4,9 +4,16 @@
   "private": true,
   "description": "Local-first Git-backed review conversations",
   "type": "module",
-  "bin": { "git-discuss": "dist/cli.js" },
-  "files": ["dist", "README.md"],
-  "engines": { "node": ">=22.12.0" },
+  "bin": {
+    "git-discuss": "dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=22.12.0"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.server.json && vite build",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.server.json --noEmit",
@@ -22,6 +29,9 @@
     "open": "^10.2.0",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
+    "react-markdown": "10.1.0",
+    "rehype-sanitize": "6.0.0",
+    "remark-gfm": "4.0.1",
     "zod": "^4.1.0"
   },
   "devDependencies": {

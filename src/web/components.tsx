@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import type { BackgroundUpdateStatus, BranchChoice, Comment, CommentMutation, Review } from '../core/models.js';
 import { commentBody, isDeleted, recordVersion } from '../core/changes.js';
 import { errorMessage } from './api.js';
+import { MarkdownEditor, MarkdownPreview } from './markdown.js';
 
 export function ErrorNotice({ message, onRetry }: { message: string; onRetry?: () => void }) {
   if (!message) return null;
@@ -169,16 +170,19 @@ export function Thread({ comment, comments, onReply, onChange, onEditingChange, 
       <time dateTime={comment.createdAt}>{new Date(comment.createdAt).toLocaleString()}</time>
       {version !== undefined && version >= 0 && <span className="version-badge">Version {version + 1}</span>}
     </div>
-    <p className={`comment-body${deleted ? ' deleted-comment' : ''}`}>{commentBody(comment)}</p>
+    <div className={`comment-body${deleted ? ' deleted-comment' : ''}`}>
+      <MarkdownPreview value={commentBody(comment)} />
+    </div>
     {!deleted && Boolean(comment.changes?.length) && <details className="comment-history"><summary>Edited · View history</summary>
-      <p className="comment-body"><strong>Original:</strong> {comment.body}</p>
+      <div className="comment-body"><strong>Original:</strong><MarkdownPreview value={comment.body} /></div>
       {comment.changes?.map(change => <div key={change.id}><small>{change.author.name} · {new Date(change.createdAt).toLocaleString()}</small>
-        <p className="comment-body">{change.kind === 'edit' ? change.body : 'Deleted'}</p></div>)}
+        <div className="comment-body"><MarkdownPreview value={change.kind === 'edit' ? change.body : 'Deleted'} /></div></div>)}
     </details>}
     <ErrorNotice message={error} />
     {editing && <form className="comment-editor" onSubmit={event => { event.preventDefault(); void change({ kind: 'edit', body: draft, expectedVersion }); }}>
-      <label htmlFor={`edit-${comment.id}`}>Edit comment</label>
-      <textarea id={`edit-${comment.id}`} value={draft} onChange={event => setDraft(event.target.value)} required maxLength={20000} rows={4} disabled={disabled || saving} autoFocus />
+      <MarkdownEditor id={`edit-${comment.id}`} label="Edit comment" value={draft} onChange={setDraft} placeholder="Update your feedback"
+        required maxLength={20000} rows={4} disabled={disabled || saving} autoFocus
+        hint="Markdown supported: bold, italic, links, code blocks, and emoji." />
       <div className="form-actions"><button disabled={disabled || saving || deleted || !draft.trim()}>{saving ? 'Saving…' : 'Save changes'}</button>
         <button type="button" className="secondary-button" disabled={saving} onClick={() => { setEditing(false); setError(''); }}>Cancel</button></div>
     </form>}
