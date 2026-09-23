@@ -139,6 +139,65 @@ details p { font-size: 13px; }
 .form-field > input, .form-field > select, .custom-source input { display: block; width: 100%; }
 .source-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
 .custom-source { margin-top: 12px; }
+.ref-picker { position: relative; margin-top: 8px; }
+.branch-picker-row { align-items: stretch; }
+.branch-picker { flex: 1; margin-top: 0; }
+.branch-picker-input {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  padding-right: 28px;
+}
+.branch-picker::after {
+  content: '▾';
+  position: absolute;
+  right: 10px;
+  top: 10px;
+  color: var(--muted);
+  pointer-events: none;
+}
+.ref-suggestions {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: calc(100% + 6px);
+  z-index: 20;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  box-shadow: 0 10px 28px var(--shadow);
+  max-height: 280px;
+  overflow: auto;
+}
+.ref-suggestions li + li { border-top: 1px solid var(--border); }
+.ref-suggestions-current {
+  padding: 8px 12px;
+  font-size: 12px;
+  color: var(--muted);
+  background: var(--subtle);
+}
+.ref-suggestions-current strong { color: var(--fg); }
+.ref-suggestion-card {
+  width: 100%;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  text-align: left;
+  background: var(--bg);
+  color: var(--fg);
+  padding: 10px 12px;
+}
+.ref-suggestion-card:hover, .ref-suggestion-card.active { background: var(--subtle); }
+.ref-suggestions-empty { padding: 12px; color: var(--muted); font-size: 13px; }
+.ref-suggestions-footer {
+  border-top: 1px solid var(--border);
+  padding: 8px 12px;
+  display: flex;
+  justify-content: center;
+}
 .field-hint { font-size: 12px; color: var(--muted); margin: 10px 0; }
 .field-label { position: relative; display: flex; align-items: center; gap: 8px; margin-bottom: 9px; }
 .field-label label { margin: 0; }
@@ -313,7 +372,9 @@ footer { text-align: center; margin-top: 40px; padding-top: 20px; border-top: 1p
   .badge { font-size: 10px; max-width: 130px; text-align: center; }
   .row, .composer-footer, .sharing-main { align-items: stretch; flex-direction: column; }
   .row input, .row select { width: 100%; flex: auto; }
+  .branch-picker-row { flex-direction: column; }
   .workspace-toolbar > .row { flex-direction: row; flex-wrap: wrap; }
+  .ref-picker .row { flex-direction: column; }
   .workspace-nav > button { padding: 12px; }
   .workspace-guide { margin-left: 6px; max-width: 100%; }
   .workspace-guide summary { font-size: 12px; }
