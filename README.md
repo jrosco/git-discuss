@@ -43,9 +43,10 @@ If Git reports that `discuss` is not a command, run `npm.cmd link` from this pro
 ## Included
 
 - Shared review engine used by the CLI and HTTP API
-- Stable UUID review identities and append-only revisions with retained base/head commits
-- Review-wide threaded discussions with explicit revision context
-- Readable CLI review lists, unambiguous short IDs, latest-revision comments, and local review deletion
+- Stable review identities that follow pushed branch commits while retaining historical comparisons
+- Review-wide threaded discussions pinned to exact code commits
+- Commit-to-code links and syncable resolved/reopened review threads
+- Readable CLI review lists, short IDs, commit-pinned comments, and local review deletion
 - Web editing of review titles, review replies, and flat commit notes; syncable deletion with retained history
 - Read-only unified diffs of retained review revisions in the browser
 - One-command / one-click sync of reviews and commit notes with a configured Git remote
@@ -69,19 +70,23 @@ git discuss review create "Simplify cache invalidation" --base main --head featu
 git discuss review list
 git discuss review list --json
 git discuss review show <review-id>
-# Defaults to the latest revision and prints the exact revision and head used
+# Defaults to the review's current observed code and prints the exact commit used
 git discuss review comment <review-id> "Why invalidate here?"
-# Select an older revision explicitly when needed
-git discuss review comment <review-id> "Why invalidate here?" --revision <revision-id>
+# Discuss an earlier saved commit explicitly
+git discuss review comment <review-id> "About this code" --commit <commit-sha>
 
-# After new commits, a rebase, or a squash, retain another revision under the same review ID
-git discuss review revise <review-id> --base main --head feature/cache
-git discuss review comment <review-id> "Updated the approach." --revision <new-revision-id> --reply-to <comment-id>
+# After committing changes, push code using Git and check for team updates
+git push origin feature/cache
+git discuss sync
+git discuss review comment <review-id> "Updated the approach." --reply-to <comment-id>
+
+# Connect an older, fixed review to a branch once
+git discuss review follow <review-id> --head feature/cache
 ```
 
-Creation and revision commands print JSON containing the review and revision IDs. Revisions capture exact base/head commits at the time of the command; they do not follow branch names. The base is supplied explicitly, not inferred as a merge base. Identical base/head pairs to the latest revision are rejected as redundant. Other pairs, including unrelated histories, are supported.
+New browser and CLI reviews follow the branch selected as their head. `HEAD` follows the currently checked-out branch when attached; a commit SHA, tag, or detached HEAD creates a fixed comparison. Use `review create ... --pinned` to keep an exact comparison even when supplying a branch. The starting base is captured explicitly and remains fixed; it is not recomputed as a merge base when source code advances.
 
-`review list` prints a table with review ID, latest revision ID, revision count, comment count, and title. Use `review list --json` for the previous complete JSON output in scripts. The top-level `id` in JSON is the review ID; IDs inside `revisions` identify revisions. `review show` continues to print complete JSON.
+`review list` shows review ID, current commit, retained commit count, comment count, and title. `review list --json` and `review show` include the saved comparisons and locally observed current comparison. Internal `revisions` and their UUIDs remain for precise base/head history and old comment links, but normal interaction uses commit IDs. `review revise` remains an advanced command for pinned reviews only; tracked reviews receive code updates through sync/checks.
 
 All review commands accept an unambiguous review ID prefix of at least four characters. Review comments also accept revision and reply-target prefixes. The list displays eight-character prefixes, lengthened when necessary to distinguish IDs. Ambiguous prefixes fail with matching full IDs so you can supply more characters. Full UUIDs still work.
 
@@ -90,16 +95,16 @@ For example, if `review list` shows review `78db5a4d`:
 ```powershell
 git discuss review show 78db5a4d
 git discuss review comment 78db5a4d "Looks good"
-git discuss review comment 78db5a4d "About the older version" --revision 6f39c9ea
+git discuss review comment 78db5a4d "About the older code" --commit abc1234
 ```
 
-The review ID is positional; `--revision` is optional and may only appear once. Omitting it chooses the latest revision while holding the write lock. Posting always prints the full revision ID and head commit used, including when replying to a comment on an older revision.
+The review ID is positional. Comments default to the review's current observed code while holding the write lock. `--commit` selects a retained head commit; `--revision` remains an advanced comparison-ID selector, useful if a historical commit has multiple different bases. Supply only one of those selectors. Posting prints the exact comparison ID and head used, including when replying to a comment on older code.
 
 ### Using the browser
 
-The browser opens in **Reviews**, with a compact review list and a **Start a review** button. You can find a review by title or author, see its version/comment counts, and open it without entering any IDs. The first-use screen explains the three steps: choose changes, leave feedback, and share with the team.
+The browser opens in **Reviews**, with a compact review list and a **Start a review** button. You can find a review by title or author, see its tracked branch/current commit and comment count, and open it without entering IDs. The first-use screen explains the three steps: choose changes, leave feedback, and share with the team.
 
-The interface uses a simple GitHub pull-request-inspired layout: light or dark colors, project navigation, a prominent review title, underlined **Discussion** / **Code changes** controls, and bordered comment threads. On desktop, one right-hand sidebar holds **Share with your team**, sharing settings, update status, and the selected review's version/Git details. On smaller screens, the sidebar appears below the main content. Links such as **Go to sharing** take you directly to it. The green **Review** label identifies the type of discussion, not an approval or merge status.
+The interface uses a simple GitHub pull-request-inspired layout: light or dark colors, project navigation, a prominent review title, underlined **Discussion** / **Code changes** controls, and bordered comment threads. On desktop, one right-hand sidebar holds **Share with your team**, sharing settings, update status, and the selected review's branch/code history. On smaller screens, the sidebar appears below the main content. Links such as **Go to sharing** take you directly to it. The green **Review** label identifies the type of discussion, not an approval or merge status.
 
 Use the **Light / Dark** button in the header to switch appearance. The first visit uses your system preference; choosing a mode saves it in browser storage for that server address. A different launch port has separate browser storage (use a fixed `--port` if you want the same address across launches). Switching themes keeps your drafts and selections. If browser storage is blocked, the toggle still works for the current page.
 
@@ -111,17 +116,41 @@ To start a review:
 4. Click **Create review**. Inspect **Code changes**, then use **Discuss these changes** to add feedback.
 5. Choose **Save locally** to share later, or **Save & share now** to immediately exchange saved feedback with teammates.
 
-**Changes to review** and **Compare with** use the same searchable dropdown pattern as the Change notes pickers: a **Current selection** header, a **Current** badge, keyboard navigation, and **Show older results**. They include local and last-downloaded team branches. To use a branch name or commit ID manually, type it and press Enter or choose its **Use** entry. Typed searches must be selected before submitting the form, so an unfinished search cannot silently use the previous selection. Escape closes the dropdown and restores the selected value. When adding a version, **Same starting code as the previous version** remains available. Help icons explain the choices on hover or keyboard focus. Only committed code is included, not unsaved or uncommitted working-file edits.
+**Changes to review** and **Compare with** use searchable dropdowns with a **Current selection** header, a **Current** badge, keyboard navigation, and **Show older results**. They include local and last-downloaded team branches. To enter a branch name or commit ID, type it and press Enter or choose its **Use** entry. An unfinished search cannot silently use the previous selection. Escape restores the selected value. Only committed code is included, not unsaved working-file edits.
 
-Open reviews have separate **Discussion** and **Code changes** views. The version selector shows **Version 1**, **Version 2**, etc.; comments carry the version they discuss. Full review/revision IDs and exact base/head commits remain available under **Git details & IDs**. These display numbers refer to the current ordered revision list; stored identities remain UUIDs.
+Open reviews have **Discussion** and **Code changes** views. **Code history** shows retained commits by short SHA and commit subject, with the current observed code first. There is no manual **Add updated code** step. After the author commits and pushes, background checks, **Check latest code**, or **Share & get updates** retain the new comparison in the same review. Enable automatic updates in Sharing settings for periodic checks; **Check latest code** is receive-only and also works when periodic checks are off.
 
-Use **Add updated code** → **Save new version** after changing the code. Previous feedback and code versions remain available. The starting code defaults to the previous version's saved base. Adding versions, refreshing feedback, and sharing preserve the version being discussed and any draft. Use **View latest version** to switch explicitly; changing versions or reviews asks before discarding unsaved feedback. Returning to the review list keeps the current review draft and marks its card.
+When you show incoming updates, an idle view of the previously current commit moves to the newly received commit automatically. Drafts remain pinned to the commit they started on, and an intentionally selected historical comparison remains selected. **View latest code** switches explicitly when you're ready. Opening a review fresh selects its current observed commit.
 
-Project navigation separates **Reviews** from **Change notes** (the previous **Commit notes** screen). **Which should I use?** explains when each is useful. The selected workspace is remembered in browser-tab session storage, so a page refresh keeps the same workspace open. Switching workspaces preserves drafts and selections within the open page; these drafts do not survive a page reload. Replies can cross review versions; the feedback form explicitly names the version that a new comment or reply will reference.
+Click **Commit abc123 ↗** on a comment or reply to open its original saved comparison. Older comments are never re-anchored to newer code. Moving to different code asks before discarding an unsaved new-comment draft. Links and selectors never check out branches or change working files. Full review/comparison IDs and base/head SHAs remain under **Git details & IDs**.
+
+### Which branch is followed?
+
+A local branch follows the same `refs/heads/<name>` on the team remote selected for sharing/receiving. Its Git upstream is not substituted: a feature branch can have `main` as its upstream. Choosing a remote-tracking branch follows its corresponding published branch name on the selected team repository. If local and published names differ, choose the team branch explicitly. Remote aliases such as `origin` stay local to each clone.
+
+The review retains its initial code if the remote still has the known older tip and the author's new code has not been pushed. Once a new pushed tip is observed, later rebases and backward moves are followed as well. Repeated observations reuse existing comparisons. A missing/deleted source branch keeps the last saved code and displays a message; restoring/pushing that branch resumes tracking. Branch renames are not inferred automatically.
+
+Existing reviews remain fixed until you choose **Follow a branch** once (or run `review follow`). Their original comments and comparisons stay intact. Tracking uses the existing comparison's base and the chosen branch's current local code as its initial snapshot. Once connected, the source branch and baseline are stable review metadata; changing to a different source/baseline requires another review.
+
+### Resolve individual discussion threads
+
+The first comment in each review thread has **Resolve thread** / **Reopen thread** controls. Resolution applies to that comment and all its replies, including replies referring to other commits. Other threads remain independent, and the discussion header shows open and resolved counts across all retained code.
+
+Resolved threads are collapsed with a **Resolved** badge, the resolving person's Git identity, and a timestamp. **Show discussion** lets you read them without reopening. The commit link stays available while collapsed. **Resolution history** retains explicit resolve/reopen actions. Even a deleted parent comment can have its surviving discussion resolved.
+
+Reopen a resolved thread before posting a new reply. Existing comment edits remain available; changing thread content makes it open again. If an offline reply, edit, or deletion arrives after a resolution, the thread also becomes open so new feedback is not hidden as completed. The original resolution remains in history. Receiving another code commit alone does not reopen a thread whose feedback has not changed.
+
+Resolve/reopen operations are saved locally first and included in **Share & get updates**. Each resolution records the exact comment-content versions it covers. A stale action is rejected if the thread changed after it was loaded. The UI blocks resolution while an inline edit or unsaved reply for that thread is open; drafts are retained if someone else resolves it. Thread resolution is separate from approving or completing the whole review.
+
+Resolution records add `resolve` and `reopen` change kinds to version-2 review comments. Teammates need the updated application to read and reconcile these records; older versions reject unknown change kinds rather than silently dropping them.
+
+Returning to the review list keeps the current draft and marks its card. Changing code comparisons or reviews asks before discarding unsaved feedback.
+
+Project navigation separates **Reviews** from **Change notes**. **Which should I use?** explains when each is useful. The workspace is remembered in browser-tab session storage. Switching workspaces preserves drafts and selections within the open page; drafts do not survive a page reload. Replies can refer to different commits; the feedback form names the commit that a new comment or reply will reference.
 
 ### Revision diff viewer
 
-Select a review, choose a version, and open **Code changes** to see the read-only **What changed?** comparison. A short legend explains added and removed lines. The unified diff compares the exact retained base and head trees, not your working files or a newly computed merge base. Additions, deletions, and hunk headers are highlighted; binary changes appear as Git's binary-change markers. Renames currently appear as deletion/addition pairs. An empty comparison explains that both saved snapshots contain the same code.
+Select a retained commit in **Code history**, then open **Code changes** for the read-only **What changed?** comparison. The diff uses that comparison's exact retained base and head, not working files or a newly computed merge base. Additions, deletions, and hunk headers are highlighted; binary changes appear as Git's markers. Renames appear as deletion/addition pairs. Empty comparisons explain that both snapshots contain the same code.
 
 Diffs are served through the authenticated `GET /api/reviews/:id/revisions/:revisionId/diff` endpoint. Repository external diff and text conversion helpers are disabled. Whitespace is preserved, and source text is rendered as text. Diffs over 2 MiB or 20,000 lines show an error with a local `git diff <base> <head>` fallback; they are not silently truncated. Inline commenting and side-by-side comparison are not implemented.
 
@@ -136,7 +165,7 @@ Changes save locally first and record the current Git author and timestamp. The 
 
 Review deletion uses a retained marker. Plain commit-note deletion removes the note from the current notes tree and is reconciled using Git history. Neither is secure erasure: previous text remains in Git history. There is no restore/undelete UI yet. Draft feedback on an externally deleted review is shown for copying when that deletion is received.
 
-Edited/deleted **review** records use schema version 2 with an append-only `changes` array. `review show` contains original text plus those change records, while the web UI displays the effective text. Commit notes use plain text in this version; `show` returns that text in `note` and the blob ID in `noteVersion`. Older structured commit-note JSON is retained verbatim and displayed as note text; this branch does not automatically convert those old comment arrays into a plain-text thread. Use the same updated application version across collaborators.
+Tracked reviews use schema version 3; older pinned reviews use versions 1/2. Edits/deletions retain their append-only `changes` history, and edits to tracked reviews preserve schema 3. `review show` contains original text plus change records and locally observed current-code information. Commit notes remain plain text; `show` returns the text in `note` and its blob ID in `noteVersion`. Older structured commit-note JSON remains verbatim note text. Collaborators need the updated application to read tracked reviews; older clients reject the new schema rather than dropping tracking data.
 
 ### Remove a review only from this clone (CLI)
 
@@ -184,7 +213,7 @@ git discuss sync --json
 
 In the browser, click **Share & get updates** in **Share with your team**. The default connection is `origin`, or the first configured remote if `origin` is absent. Change it under **Sharing settings & help** → **Team repository**. That section explains what a Git remote is and offers setup guidance if no remote is configured.
 
-The workspaces refresh after the operation while preserving new-comment drafts, the loaded commit, and the selected review version. When an inline comment edit, title edit, or version form is open, display refresh is deferred until you finish or cancel it and choose **Show updates**. Plain-language results lead with whether feedback was exchanged; **Exchange details** contains the ref counts. These describe storage refs downloaded, reconciled, uploaded, or unchanged—not individual comments. Posting still saves locally; sharing is an explicit action. The new-changes indicator tracks successful saves made in the current browser session, not a full repository-wide pending-sync audit. Draft text is never included in sharing.
+Workspaces refresh after sharing. A tracked review's current-code view follows newly received code when there is no draft; drafts and deliberately selected historical comparisons keep their original commit context. Inline comment edits, title edits, and branch-connection forms defer display refresh until finished or canceled. **Exchange details** counts discussion storage refs, not comments or code branches. Posting still saves locally; uploading feedback is explicit. The new-changes indicator tracks saves made in the current browser session, not a full repository-wide pending-sync audit. Draft text is never uploaded.
 
 Errors show a plain-language explanation with the original error available under **Technical details**. Setup commands and advanced Git IDs remain available without being required for everyday navigation.
 
@@ -194,11 +223,11 @@ For a new clone, run `git discuss sync` to download discussions that normal clon
 
 In **Sharing settings & help**, select your team repository and enable **Check for team updates automatically**. Checks start immediately, then run once per minute after the preceding check finishes. **Check now** runs a receive-only check sooner. Checks never overlap.
 
-The local server fetches discussion refs and reconciles incoming notes, reviews, edits, and deletions into local storage. This operation **never pushes**, even when you have unpublished local feedback. It does not change code branches, working files, or remote-tracking code branches. Uploads remain explicit through **Share & get updates** or a comment form's **Save & share now**.
+The local server fetches discussion refs **and the source branches of active tracked reviews**, reconciling feedback and retaining newly observed code comparisons. It **never pushes**, even when you have unpublished local feedback. Code branches are fetched into temporary application refs; checked-out branches, working files, and normal remote-tracking branches are unchanged. Use normal Git tools to commit and push code. Uploading discussions remains explicit through **Share & get updates** or **Save & share now**.
 
-The browser checks the server's lightweight update status every five seconds. New local discussion data produces a **New feedback available → Show updates** notice. The active discussion and review list stay as loaded until you choose to show updates; commit note counts can refresh quietly. Your draft, selected commit/version, and expanded discussion details stay in place. The notice only occupies space when updates are available; no blank placeholder is reserved. Inline edit/title/version forms defer refresh until finished or canceled, including when another user edits or deletes the same content. A deleted review still offers its unsaved new-comment draft for copying when you apply the update.
+The browser checks update status every five seconds. Incoming tracked code or review feedback produces **New code or feedback available → Show updates**. Content stays as loaded until you choose to show updates; note counts can refresh quietly. Without a draft, a view of the current code advances to the newly received commit. A draft or a historical comparison stays pinned to its original commit. The notice takes no space when there are no updates. Inline edit/title/branch-connection forms defer refresh until finished or canceled. A deleted review still offers its unsaved new-comment draft for copying.
 
-The notice identifies the most recent received batch: which workspace changed, how many reviews changed, and up to five review IDs / commit IDs, with explicit **Open** links. **Show updates** refreshes the current selection; it never automatically opens a different review or commit. The latest summary is kept when automatic checks are disabled, and identifies the remote it came from. It is a summary of the latest batch, not an exhaustive change-by-change audit across every unseen check. Ref-history-only changes without new note/review content do not generate a feedback notification.
+The notice identifies the most recent received batch: which workspace changed, how many reviews changed, and up to five review IDs / commit IDs, with explicit **Open** links. **Show updates** keeps the current review or commit-note selection; tracked review code advances under the draft-safe rules above. Other reviews or commit notes are opened only through explicit navigation. The latest summary is kept when automatic checks are disabled, and identifies the remote it came from. It is a summary of the latest batch, not an exhaustive change-by-change audit across every unseen check. Ref-history-only changes without new note/review content do not generate a feedback notification.
 
 Network and reconciliation failures appear as a quiet **Updates paused — will retry** status, with optional details. Retries back off to a maximum of five minutes; you can also choose **Check now**. A conflict leaves local discussion refs unchanged. New comments can still be drafted, and foreground saves/sharing pause or cancel the server's current background check before writing.
 
@@ -208,17 +237,19 @@ The setting is **off by default**, shared by browser tabs connected to this serv
 
 Authenticated API endpoints: `GET /api/background-updates` for status, `POST /api/background-updates` with `{ "enabled": true, "remote": "origin" }` to configure, and `POST /api/background-updates/check` to request an immediate check while enabled. These endpoints never invoke the push-capable sync operation.
 
+`POST /api/receive` with `{ "remote": "origin" }` performs a foreground, receive-only check even if automatic updates are disabled. The review's **Check latest code** button uses it. `POST /api/reviews/:id/tracking` with `{ "head": "feature/login" }` connects an existing pinned review. API creation supports `followBranch: true` (and an optional local `trackingRemote` hint for the initial cached remote tip); omission preserves pinned behavior for older API clients. CLI and browser creation opt into following by default. Review API responses include `currentRevisionId` and local `trackingStatus`, separate from stored shared metadata.
+
 ### Setup and scope
 
 - A configured remote is required, normally `origin`. Check with `git remote -v`; if needed, add one with `git remote add origin <repository-url>`.
 - The remote must permit custom refs and atomic Git pushes. Sync requires one matching fetch/push URL for the selected remote. Split URLs or multiple destinations need a separate, single-destination remote.
 - Configure Git authentication beforehand using your usual credential manager or SSH agent. Sync disables terminal credential prompts and limits each network subprocess to two minutes. Authentication/network errors are displayed; configure access and retry.
-- Sync transfers `refs/notes/git-discuss` and all `refs/git-discuss/reviews/*`, including code objects retained by those discussions. It does not move code branches, update remote-tracking code branches, check out files, or publish unrelated notes refs. Use normal Git commands to fetch/push branch tips.
+- Sync transfers `refs/notes/git-discuss` and `refs/git-discuss/reviews/*`, including retained code objects. It also fetches named source branches into temporary refs for tracked reviews. It does not publish branch tips, update normal remote-tracking branches, check out files, or publish private tracking state. Use normal Git commands to push code.
 - Web edits and deletion markers are propagated. Removing a ref directly (or using the existing local-only CLI delete command) is not a shared deletion; another clone can supply that ref again. Web-deleted reviews remain hidden after syncing with older snapshots.
 
 ### Reconciliation and failure handling
 
-Explicit Sync holds the application write lock, fetches remote discussion refs into a unique temporary namespace, and validates every snapshot before updating local discussion refs. Background receive uses the shorter publication-only lock described above. Review synchronization combines immutable comment/revision records and their append-only change histories by ID. Identical records are deduplicated, and additions from both developers are retained. Existing sequence constraints preserve parent-before-reply and revision history order; concurrent records are ordered deterministically by timestamp and UUID. Concurrent review revisions are both retained, not rebased or collapsed into one code change. Reviewers should explicitly select which revision they intend to discuss.
+Explicit Sync holds the application lock while reconciling and publishing; background receive prepares outside that lock and publishes with guarded atomic ref updates. Review comments and their edit histories combine by immutable ID, preserving parent-before-reply order. Tracked comparisons merge as a deduplicated set so different observers can see commits in different orders after a rebase or rewind. Automatically retained comparisons use deterministic UUIDs derived from the review ID and exact base/head pair, with metadata from the code commit. Two developers observing the same push produce the same record. Pinned legacy comparisons retain their existing ordering rules.
 
 Plain notes are reconciled **per annotated commit**, using their common notes history. Independent notes on different commits and one-sided edits/deletions are retained. Independent appends to the same existing text retain both suffixes in deterministic order. Conflicting replacements, or an edit racing with deletion of the same note, stop synchronization before publishing any local discussion ref; neither side is silently preferred. Git commit times are not used to guess a winner.
 
@@ -259,7 +290,9 @@ CLI / HTTP → review engine → Git storage. Browser assets are compiled by Vit
 
 ### Review storage
 
-Each review is stored at `refs/git-discuss/reviews/<review-id>`. The ref points to a Git commit whose tree contains a validated `review.json` snapshot: version, stable ID, title, author, creation time, ordered revisions, and comments. Each revision has its own UUID, exact base/head object IDs, author, and creation time. Existing revision and comment records are never modified by application commands.
+Each review is stored at `refs/git-discuss/reviews/<review-id>`. Its commit tree contains validated `review.json`: schema, stable ID, title, author, creation time, retained comparisons (`revisions`), comments, and optional branch tracking metadata. Comparisons retain exact base/head IDs and an internal UUID; old comments continue to reference that UUID and their head commit. Existing records are not rewritten when a branch advances.
+
+Tracking metadata records the published branch name, fixed base, initial reviewed head, and an optional initially cached remote head. It is shared independently of local remote aliases. Current observations are private JSON blobs at `refs/git-discuss/tracking/<review-id>` and are never pushed by application sync. They allow a branch to return to an already retained commit without duplicating history or relying on commit timestamps to guess which code is current. Public comparison snapshots and their local observation pointers are published in one guarded transaction. If a foreground writer changes a review during code fetching, the entire background publication is retried from fresh data.
 
 Every write creates a new snapshot commit. Its first parent is the previous snapshot when one exists. Creation and revision writes also link their base/head code commits as parents (duplicates removed). These links retain all reviewed commits and trees even after branches are rewritten or deleted and Git garbage collection runs. Comment-only writes retain code through their previous snapshot. Review snapshots are application metadata commits, not code commits to merge into a working branch.
 
@@ -273,7 +306,7 @@ In **Change notes**, expand **Git details** to see the code commit's author and 
 
 ### Boundaries
 
-- Branch names resolve to exact commits. New commits, rebases, and squash merges do not automatically carry discussion forward.
+- Tracked reviews follow pushed source-branch commits while preserving earlier discussion anchors. Pinned reviews and standalone commit notes stay on their exact code snapshots. The comparison base is fixed at review creation/connection; following a moving target/base branch is not implemented.
 - Inline comments, approvals, and summary generation are planned, not implemented.
 - Normal clone/fetch/push does not automatically transfer these notes or review refs.
 - Use `git discuss sync` to reconcile concurrent additions rather than force-pushing discussion refs.

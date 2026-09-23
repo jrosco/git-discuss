@@ -6,7 +6,7 @@ import { z } from 'zod';
 import { Reviews } from '../core/reviews.js';
 import { Synchronization } from '../core/sync.js';
 import { BackgroundUpdates } from './background-updates.js';
-import { backgroundUpdatesInputSchema } from '../core/models.js';
+import { backgroundUpdatesInputSchema, followReviewSchema } from '../core/models.js';
 import { commentMutationSchema, reviewMutationSchema, noteCountsInputSchema } from '../core/models.js';
 import { addCommentSchema, createReviewSchema, revisionInputSchema, reviewCommentInputSchema, identifierInputSchema, commitListInputSchema, syncInputSchema } from '../core/models.js';
 
@@ -48,6 +48,7 @@ export async function createServer(reviews: Reviews, initialCommit = 'HEAD', opt
     const input = syncInputSchema.parse(request.body);
     return background.withForeground(() => synchronization.sync(input));
   });
+  app.post('/api/receive', async request => background.receiveNow(syncInputSchema.parse(request.body)));
   app.get('/api/background-updates', async () => background.status());
   app.post('/api/background-updates', async request => background.configure(backgroundUpdatesInputSchema.parse(request.body)));
   app.post('/api/background-updates/check', async () => background.checkNow());
@@ -55,20 +56,24 @@ export async function createServer(reviews: Reviews, initialCommit = 'HEAD', opt
   app.get('/api/commits', async request => reviews.repository.commits(commitListInputSchema.parse(request.query)));
   app.post('/api/note-counts', async request => reviews.repository.noteCounts(noteCountsInputSchema.parse(request.body).commits));
   const reviewId = (params: unknown) => z.object({ id: identifierInputSchema }).parse(params).id;
-  app.get('/api/reviews', async () => reviews.listReviews());
+  app.get('/api/reviews', async () => Promise.all((await reviews.listReviews()).map(review => reviews.view(review))));
   app.post('/api/reviews', async (request, reply) => {
     const input = createReviewSchema.parse(request.body);
-    return reply.code(201).send(await background.withForeground(() => reviews.createReview(input)));
+    return reply.code(201).send(await reviews.view(await background.withForeground(() => reviews.createReview(input))));
   });
-  app.get('/api/reviews/:id', async request => reviews.review(reviewId(request.params)));
+  app.get('/api/reviews/:id', async request => reviews.view(await reviews.review(reviewId(request.params))));
+  app.post('/api/reviews/:id/tracking', async request => {
+    const id = reviewId(request.params); const input = followReviewSchema.parse(request.body);
+    return reviews.view(await background.withForeground(() => reviews.followBranch(id, input)));
+  });
   app.post('/api/reviews/:id/change', async request => {
     const id = reviewId(request.params); const input = reviewMutationSchema.parse(request.body);
-    return background.withForeground(() => reviews.changeReview(id, input));
+    return reviews.view(await background.withForeground(() => reviews.changeReview(id, input)));
   });
   app.post('/api/reviews/:id/comments/:commentId/change', async request => {
     const { id, commentId } = z.object({ id: identifierInputSchema, commentId: identifierInputSchema }).parse(request.params);
     const input = commentMutationSchema.parse(request.body);
-    return background.withForeground(() => reviews.changeReviewComment(id, commentId, input));
+    return reviews.view(await background.withForeground(() => reviews.changeReviewComment(id, commentId, input)));
   });
   app.post('/api/commits/:commit/comments/:commentId/change', async request => {
     const { commit, commentId } = z.object({ commit: z.string().min(1).max(256), commentId: identifierInputSchema }).parse(request.params);
@@ -81,7 +86,7 @@ export async function createServer(reviews: Reviews, initialCommit = 'HEAD', opt
   });
   app.post('/api/reviews/:id/revisions', async (request, reply) => {
     const id = reviewId(request.params); const input = revisionInputSchema.parse(request.body);
-    return reply.code(201).send(await background.withForeground(() => reviews.addRevision(id, input)));
+    return reply.code(201).send(await reviews.view(await background.withForeground(() => reviews.addRevision(id, input))));
   });
   app.post('/api/reviews/:id/comments', async (request, reply) => {
     const id = reviewId(request.params); const input = reviewCommentInputSchema.parse(request.body);

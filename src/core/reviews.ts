@@ -5,7 +5,9 @@ import { addCommentSchema, commentSchema, type AddComment, type Comment, type Co
 import { createReviewSchema, revisionInputSchema, reviewCommentInputSchema, reviewSchema, type Review, type RevisionDiff } from './models.js';
 import { resolveIdentifier } from './identifiers.js';
 import { commentChangeSchema, commentMutationSchema, reviewMutationSchema, type CommentMutation, type ReviewMutation } from './models.js';
-import { isDeleted, recordVersion, MAX_COMMIT_NOTE_LENGTH } from './changes.js';
+import { isDeleted, isThreadResolved, recordVersion, threadRoot, threadVersion, MAX_COMMIT_NOTE_LENGTH } from './changes.js';
+import { BranchTracking } from './tracking.js';
+import { followReviewSchema, type ReviewView } from './models.js';
 
 export class Reviews {
   constructor(readonly repository: Repository) {}
@@ -27,6 +29,28 @@ export class Reviews {
 
   async review(id: string): Promise<Review> {
     return (await this.readReview(id)).review;
+  }
+
+  async view(review: Review): Promise<ReviewView> {
+    return new BranchTracking(this.repository).view(review);
+  }
+
+  async followBranch(id: string, input: { head: string; trackingRemote?: string }): Promise<Review> {
+    const { head, trackingRemote } = followReviewSchema.parse(input);
+    return this.repository.withWriteLock(async () => {
+      const { review, oid } = await this.readReview(id);
+      this.assertEditable(review);
+      if (review.tracking) throw new Error('This review already follows a branch.');
+      const tracking = new BranchTracking(this.repository);
+      const { commit, branch } = await tracking.sourceFor(head);
+      if (!branch) throw new Error('Choose a branch to follow, rather than an exact commit or tag.');
+      const initialRemoteHead = await tracking.cachedRemoteHead(branch, head, trackingRemote);
+      review.tracking = { branch, base: review.revisions[review.revisions.length - 1].base, initialHead: commit, ...(initialRemoteHead ? { initialRemoteHead } : {}) };
+      review.schema = 3;
+      const next = await tracking.retain(review, commit);
+      await this.repository.writeReviewSnapshot(this.reviewRef(review.id), oid, JSON.stringify(reviewSchema.parse(next)), [commit, ...(initialRemoteHead ? [initialRemoteHead] : [])]);
+      return next;
+    });
   }
 
   async listReviews(): Promise<Review[]> {
@@ -57,8 +81,8 @@ export class Reviews {
     };
   }
 
-  private assertEditable(record: { id: string; changes?: { id: string; kind: string }[] }, expectedVersion?: string) {
-    if (isDeleted(record)) throw new Error('This item was deleted. Refresh to see the latest discussion.');
+  private assertEditable(record: { id: string; changes?: { id: string; kind: string }[] }, expectedVersion?: string, allowDeleted = false) {
+    if (!allowDeleted && isDeleted(record)) throw new Error('This item was deleted. Refresh to see the latest discussion.');
     if (expectedVersion !== undefined && recordVersion(record) !== expectedVersion) {
       throw new Error('This item changed since you opened it. Refresh before editing or deleting; your draft has not been saved.');
     }
@@ -70,7 +94,7 @@ export class Reviews {
       const { review, oid } = await this.readReview(id);
       this.assertEditable(review, parsed.expectedVersion);
       const { expectedVersion: _expected, ...action } = parsed;
-      review.schema = 2;
+      review.schema = Math.max(review.schema, 2) as Review['schema'];
       review.changes = [...(review.changes ?? []), { ...action, id: randomUUID(), author: await this.author(), createdAt: new Date().toISOString() }];
       await this.repository.writeReviewSnapshot(this.reviewRef(review.id), oid, JSON.stringify(reviewSchema.parse(review)), []);
       return review;
@@ -78,8 +102,11 @@ export class Reviews {
   }
 
   private async changeCommentRecord<T extends Comment>(comment: T, input: CommentMutation): Promise<T> {
-    this.assertEditable(comment, input.expectedVersion);
-    const { expectedVersion: _expected, ...action } = input;
+    const statusChange = input.kind === 'resolve' || input.kind === 'reopen';
+    this.assertEditable(comment, input.expectedVersion, statusChange);
+    const action = input.kind === 'resolve' ? { kind: input.kind, threadVersion: input.expectedThread }
+      : input.kind === 'reopen' ? { kind: input.kind }
+        : input.kind === 'edit' ? { kind: input.kind, body: input.body } : { kind: input.kind };
     return { ...comment, schema: 2, changes: [...(comment.changes ?? []), commentChangeSchema.parse({
       ...action, id: randomUUID(), author: await this.author(), createdAt: new Date().toISOString(),
     })] };
@@ -92,8 +119,18 @@ export class Reviews {
       this.assertEditable(review);
       const resolved = resolveIdentifier(commentId, review.comments.map(item => item.id), 'Comment');
       const index = review.comments.findIndex(item => item.id === resolved);
+      if (parsed.kind === 'resolve' || parsed.kind === 'reopen') {
+        const root = review.comments[index];
+        if (root.replyTo) throw new Error('Only the first comment of a thread can be resolved or reopened.');
+        if (parsed.expectedThread !== threadVersion(review.comments, root.id)) {
+          throw new Error('This thread changed since you opened it. Refresh the discussion before resolving or reopening it.');
+        }
+        const completed = isThreadResolved(root, review.comments);
+        if (parsed.kind === 'resolve' && completed) throw new Error('This thread is already resolved.');
+        if (parsed.kind === 'reopen' && !completed) throw new Error('This thread is already open. Refresh to see any new feedback.');
+      }
       review.comments[index] = await this.changeCommentRecord(review.comments[index], parsed);
-      review.schema = 2;
+      review.schema = Math.max(review.schema, 2) as Review['schema'];
       await this.repository.writeReviewSnapshot(this.reviewRef(review.id), oid, JSON.stringify(reviewSchema.parse(review)), []);
       return review;
     });
@@ -116,13 +153,18 @@ export class Reviews {
   async createReview(input: z.input<typeof createReviewSchema>): Promise<Review> {
     const parsed = createReviewSchema.parse(input);
     return this.repository.withWriteLock(async () => {
-      const revision = await this.revision(parsed);
+      const source = parsed.followBranch ? await new BranchTracking(this.repository).sourceFor(parsed.head) : null;
+      const revision = await this.revision({ base: parsed.base, head: source?.commit ?? parsed.head });
+      const branch = source?.branch ?? null;
+      const initialRemoteHead = branch ? await new BranchTracking(this.repository).cachedRemoteHead(branch, parsed.head, parsed.trackingRemote) : undefined;
       const review = reviewSchema.parse({
-        schema: 1, type: 'review', id: randomUUID(), title: parsed.title,
-        author: revision.author, createdAt: revision.createdAt, revisions: [revision], comments: [],
+        schema: branch ? 3 : 1, type: 'review', id: randomUUID(), title: parsed.title,
+        author: revision.author, createdAt: revision.createdAt,
+        revisions: [branch ? { ...revision, subject: await this.repository.git('show', '-s', '--no-show-signature', '--format=%s', revision.head, '--') } : revision], comments: [],
+        ...(branch ? { tracking: { branch, base: revision.base, initialHead: revision.head, ...(initialRemoteHead ? { initialRemoteHead } : {}) } } : {}),
       });
       await this.repository.writeReviewSnapshot(this.reviewRef(review.id), undefined,
-        JSON.stringify(review), [revision.base, revision.head]);
+        JSON.stringify(review), [revision.base, revision.head, ...(initialRemoteHead ? [initialRemoteHead] : [])]);
       return review;
     });
   }
@@ -131,6 +173,7 @@ export class Reviews {
     return this.repository.withWriteLock(async () => {
       const { review, oid } = await this.readReview(id);
       this.assertEditable(review);
+      if (review.tracking) throw new Error('This review follows a branch. Push your code and check for updates instead of adding a manual version.');
       const revision = await this.revision(input);
       const latest = review.revisions[review.revisions.length - 1];
       if (latest.base === revision.base && latest.head === revision.head) {
@@ -148,10 +191,20 @@ export class Reviews {
     return this.repository.withWriteLock(async () => {
       const { review, oid } = await this.readReview(id);
       this.assertEditable(review);
-      const revisionId = parsed.revisionId === undefined ? review.revisions[review.revisions.length - 1].id :
+      if (parsed.commit && parsed.revisionId) throw new Error('Choose either a saved commit or a comparison ID, not both.');
+      let revisionId = parsed.revisionId === undefined ? (await this.view(review)).currentRevisionId :
         resolveIdentifier(parsed.revisionId, review.revisions.map(item => item.id), 'Revision');
+      if (parsed.commit) {
+        const commit = await this.repository.resolve(parsed.commit);
+        const matches = review.revisions.filter(item => item.head === commit);
+        if (!matches.length) throw new Error('This commit is not in the review. Check for code updates first.');
+        if (matches.length > 1) throw new Error('This commit has multiple saved comparisons. Use --revision with a comparison ID.');
+        revisionId = matches[0].id;
+      }
       const revision = review.revisions.find(item => item.id === revisionId)!;
       const replyTo = parsed.replyTo ? resolveIdentifier(parsed.replyTo, review.comments.map(item => item.id), 'Reply target') : null;
+      const root = replyTo ? threadRoot(review.comments, replyTo) : undefined;
+      if (root && isThreadResolved(root, review.comments)) throw new Error('This thread is resolved. Reopen it before adding a reply.');
       const comment = {
         ...parsed, revisionId, replyTo, schema: 1 as const, type: 'comment' as const, id: randomUUID(), commit: revision.head,
         author: await this.author(), createdAt: new Date().toISOString(),

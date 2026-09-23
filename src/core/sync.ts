@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { NOTES_REF, Repository } from '../git/repository.js';
 import { syncInputSchema, type Review, type SyncResult, type ReceiveResult } from './models.js';
 import { canonical, mergeReviews, parseReview } from './reconciliation.js';
+import { BranchTracking } from './tracking.js';
 
 const REVIEWS = 'refs/git-discuss/reviews/';
 type RefMap = Map<string, string>;
@@ -144,6 +145,35 @@ export class Synchronization {
     return this.snapshot(files, parents, signal);
   }
 
+  private async trackBranches(candidates: RefMap, remote: string, staging: string, signal?: AbortSignal) {
+    const reviews = new Map<string, Review>();
+    for (const [ref, oid] of candidates) {
+      if (!ref.startsWith(REVIEWS)) continue;
+      signal?.throwIfAborted();
+      const review = parseReview(await this.repository.readReviewSnapshot(oid), ref.slice(REVIEWS.length));
+      if (review.tracking) reviews.set(ref, review);
+    }
+    const prepared = await new BranchTracking(this.repository).prepare([...reviews.values()], remote, staging, signal);
+    const publicChanges: RefMap = new Map();
+    const privateChanges: RefMap = new Map();
+    const privateInputs = new Map<string, string | undefined>();
+    const updatedIds = new Set<string>();
+    for (const item of prepared) {
+      signal?.throwIfAborted();
+      const ref = `${REVIEWS}${item.review.id}`;
+      const original = reviews.get(ref)!;
+      if (canonical(original) !== canonical(item.review)) {
+        const known = new Set(original.revisions.map(revision => revision.id));
+        const retained = item.review.revisions.filter(revision => !known.has(revision.id)).flatMap(revision => [revision.base, revision.head]);
+        publicChanges.set(ref, await this.snapshot(new Map([['review.json', canonical(item.review)]]), [candidates.get(ref)!, ...retained], signal));
+        updatedIds.add(item.review.id);
+      }
+      privateInputs.set(item.stateRef, item.previous);
+      if (item.stateChanged) { privateChanges.set(item.stateRef, item.stateOid); updatedIds.add(item.review.id); }
+    }
+    return { publicChanges, privateChanges, privateInputs, updatedIds, checkedReviews: [...reviews.keys()] };
+  }
+
   async receive(input: { remote?: string } = {}, signal?: AbortSignal): Promise<ReceiveResult> {
     const { remote } = syncInputSchema.parse(input);
     signal?.throwIfAborted();
@@ -158,8 +188,7 @@ export class Synchronization {
       const specs: string[] = [];
       if (names.includes(NOTES_REF)) specs.push(`${NOTES_REF}:${staging}notes`);
       if (names.some(ref => ref.startsWith(REVIEWS))) specs.push(`${REVIEWS}*:${staging}reviews/*`);
-      if (!specs.length) return { remote, updatedRefs: [], updatedReviewIds: [], updatedNoteCommits: [] };
-      await this.repository.networkWithSignal(signal, 'fetch', '--atomic', '--no-tags', '--no-write-fetch-head', '--refmap=', remote, ...specs);
+      if (specs.length) await this.repository.networkWithSignal(signal, 'fetch', '--atomic', '--no-tags', '--no-write-fetch-head', '--refmap=', remote, ...specs);
       signal?.throwIfAborted();
       const fetched = await this.refs(staging);
       const local = await this.refs(NOTES_REF, REVIEWS);
@@ -178,16 +207,22 @@ export class Synchronization {
         const next = await this.reconcile(ref, left, right, signal);
         if (next !== left) targets.set(ref, next);
       }
+      const candidates = new Map([...local].filter(([ref]) => ref.startsWith(REVIEWS)));
+      for (const [ref, oid] of targets) candidates.set(ref, oid);
+      const tracked = await this.trackBranches(candidates, remote, staging, signal);
+      for (const ref of tracked.checkedReviews) checked.set(ref, local.get(ref));
+      for (const [ref, oid] of tracked.publicChanges) targets.set(ref, oid);
+      for (const [ref, previous] of tracked.privateInputs) checked.set(ref, previous);
       signal?.throwIfAborted();
-      if (!targets.size) return { remote, updatedRefs: [], updatedReviewIds: [], updatedNoteCommits: [] };
-      const updatedReviewIds: string[] = [];
+      if (!targets.size && !tracked.privateChanges.size) return { remote, updatedRefs: [], updatedReviewIds: [], updatedNoteCommits: [] };
+      const updatedReviewIds = new Set(tracked.updatedIds);
       for (const [ref, next] of targets) {
         if (!ref.startsWith(REVIEWS)) continue;
         signal?.throwIfAborted();
         const previous = checked.get(ref);
         const id = ref.slice(REVIEWS.length);
         if (!previous || canonical(parseReview(await this.repository.readReviewSnapshot(previous), id)) !==
-            canonical(parseReview(await this.repository.readReviewSnapshot(next), id))) updatedReviewIds.push(id);
+             canonical(parseReview(await this.repository.readReviewSnapshot(next), id))) updatedReviewIds.add(id);
       }
       const updatedNoteCommits: string[] = [];
       if (targets.has(NOTES_REF)) {
@@ -202,13 +237,13 @@ export class Synchronization {
       await this.repository.withWriteLock(async () => {
         signal?.throwIfAborted();
         const commands = [...checked].map(([ref, previous]) => {
-          const next = targets.get(ref);
-          return next ? `update ${ref} ${next} ${previous ?? '0'.repeat(next.length)}` : `verify ${ref} ${previous}`;
+          const next = targets.get(ref) ?? tracked.privateChanges.get(ref);
+          return next ? `update ${ref} ${next} ${previous ?? '0'.repeat(next.length)}` : `verify ${ref} ${previous ?? '0'.repeat([...targets.values(), ...tracked.privateChanges.values()][0].length)}`;
         });
         // If any local input changed while preparing, the whole transaction fails. The next check retries.
         await this.repository.gitInput(`start\noption no-deref\n${commands.join('\n')}\nprepare\ncommit\n`, 'update-ref', '--stdin');
       });
-      return { remote, updatedRefs: [...targets.keys()], updatedReviewIds, updatedNoteCommits };
+      return { remote, updatedRefs: [...targets.keys(), ...tracked.privateChanges.keys()], updatedReviewIds: [...updatedReviewIds], updatedNoteCommits };
     } finally {
       const staged = await this.refs(staging);
       if (staged.size) await this.repository.gitInput(
@@ -258,15 +293,23 @@ export class Synchronization {
           targets.set(ref, oid);
           if (right && right !== left) result.downloaded++;
           if (left && right && oid !== left && oid !== right) result.merged++;
-          if (oid !== right) result.uploaded++;
-          if (oid === left && oid === right) result.unchanged++;
         }
-        if (!targets.size) return result;
+        const tracked = await this.trackBranches(targets, remote, staging);
+        for (const [ref, oid] of tracked.publicChanges) targets.set(ref, oid);
+        for (const [ref, oid] of targets) {
+          if (oid !== remoteRefs.get(ref)) result.uploaded++;
+          if (oid === local.get(ref) && oid === remoteRefs.get(ref)) result.unchanged++;
+        }
+        if (!targets.size && !tracked.privateChanges.size) return result;
         // Compare-and-swap all local refs in one transaction, including unchanged refs read during sync.
         const commands = [...targets].map(([ref, oid]) => {
           const previous = local.get(ref) ?? '0'.repeat(oid.length);
           return oid === previous ? `verify ${ref} ${previous}` : `update ${ref} ${oid} ${previous}`;
         });
+        for (const [ref, previous] of tracked.privateInputs) {
+          const next = tracked.privateChanges.get(ref);
+          commands.push(next ? `update ${ref} ${next} ${previous ?? '0'.repeat(next.length)}` : `verify ${ref} ${previous}`);
+        }
         await this.repository.gitInput(`start\noption no-deref\n${commands.join('\n')}\nprepare\ncommit\n`, 'update-ref', '--stdin');
         published = true;
         if (result.uploaded) {

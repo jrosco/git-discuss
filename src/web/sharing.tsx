@@ -100,7 +100,7 @@ export function SharingPanel({ busy, localChanges, onBusy, onFinished, onBackgro
   return <section className="card sharing-panel" aria-label="Share with your team">
     <div className="sharing-main"><div>
       <h2>Share with your team</h2>
-      <p>{localChanges ? 'You have new feedback or versions saved on this computer.' : 'Send saved reviews and notes, and get your teammates’ latest feedback.'}</p>
+      <p>{localChanges ? 'You have new feedback or review changes saved on this computer.' : 'Send saved reviews and notes, and get your teammates’ latest code and feedback.'}</p>
       <small>{remote ? `Team repository: ${remote}` : 'Connect to your team’s repository to exchange feedback.'}{lastShared && ` · Last successful exchange at ${lastShared}`}</small>
     </div><button id="share-button" type="button" disabled={busy || loading || settingsBusy || !remote} onClick={() => void sync()}>{busy ? 'Sharing & getting updates…' : 'Share & get updates'}</button></div>
     <details className="sharing-settings" open={!loading && remotes.length === 0 ? true : undefined}>
@@ -119,7 +119,7 @@ export function SharingPanel({ busy, localChanges, onBusy, onFinished, onBackgro
           disabled={busy || loading || settingsBusy || !background || (!remote && !background.enabled)}
           onChange={event => void configureBackground(event.target.checked, remote || background?.remote || 'origin')} />
           Check for team updates automatically</label>
-        <p>Checks every minute while this server is running. Only receives updates; upload using Share & get updates or a form’s Save & share now button.</p>
+        <p>Checks every minute for team feedback and commits pushed to tracked review branches. Upload feedback using Share & get updates. Push your code using your usual Git tools.</p>
         <button type="button" className="secondary-button" disabled={busy || settingsBusy || !background?.enabled || background.running} onClick={() => void checkNow()}>Check now</button>
         <p className="field-hint">This setting applies to all browser tabs connected to this server and resets when the server restarts.</p>
         <ErrorNotice message={backgroundError} />

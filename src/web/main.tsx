@@ -122,7 +122,7 @@ function App() {
         {/* Keep both mounted: navigation and sharing must not discard drafts or selected versions. */}
         <section id="reviews-workspace" aria-labelledby="reviews-heading" hidden={workspace !== 'reviews'}>
           <header className="workspace-heading"><div className="eyebrow">DISCUSS WORK IN PROGRESS</div><h2 id="reviews-heading">Reviews</h2>
-            <p>Choose changes, ask for feedback, and keep the conversation together as you update your code.</p></header>
+            <p>Review a branch and keep the conversation together as new commits are pushed.</p></header>
           {repository && <ReviewsWorkspace syncVersion={syncVersion} backgroundRevision={backgroundRevision} backgroundSummary={backgroundSummary} sharing={composerSharing} sidebarTarget={reviewDetailsTarget} onSaved={() => setLocalChanges(true)} onShare={showSharing} />}
         </section>
         <section id="notes-workspace" aria-labelledby="notes-heading" hidden={workspace !== 'notes'}>
@@ -137,7 +137,7 @@ function App() {
           setSyncVersion(version => version + 1); if (success) { setLocalChanges(false); setShareSuccessVersion(version => version + 1); }
         }} /></div>
         <fieldset disabled={syncing} hidden={workspace !== 'reviews'} className="review-sidebar-controls">
-          <legend className="sr-only">Review version and details</legend>
+          <legend className="sr-only">Reviewed code and details</legend>
           <div ref={setReviewDetailsTarget} />
         </fieldset>
       </aside>}

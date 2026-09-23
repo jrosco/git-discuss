@@ -10,9 +10,41 @@ import { Reviews } from '../src/core/reviews.js';
 import { Synchronization } from '../src/core/sync.js';
 import { canonical, mergeReviews } from '../src/core/reconciliation.js';
 import { createServer } from '../src/server/app.js';
-import { isDeleted, recordVersion, reviewTitle } from '../src/core/changes.js';
+import { isDeleted, isThreadResolved, recordVersion, reviewTitle, threadVersion } from '../src/core/changes.js';
 
 const execute = promisify(execFile);
+
+test('thread resolution syncs, but concurrent offline replies reopen the thread without losing status history', async t => {
+  const { a, b, sa, sb } = await fixture(t);
+  const review = await a.createReview({ title: 'Resolve across clones', base: 'HEAD', head: 'HEAD' });
+  const root = await a.addReviewComment(review.id, { body: 'Question' });
+  await sa.sync(); await sb.sync();
+  let local = await a.review(review.id);
+  await a.changeReviewComment(review.id, root.id, { kind: 'resolve', expectedVersion: root.id, expectedThread: threadVersion(local.comments, root.id) });
+  // Bob has not received Alice's resolution and can still reply to his open copy.
+  const incoming = await b.addReviewComment(review.id, { body: 'Offline follow-up', replyTo: root.id });
+  await sa.sync(); await sb.sync(); await sa.receive();
+  local = await a.review(review.id);
+  assert.deepEqual(local, await b.review(review.id));
+  assert.equal(isThreadResolved(local.comments[0], local.comments), false);
+  assert.equal(local.comments[1].id, incoming.id);
+  assert.equal(local.comments[0].changes?.[0].kind, 'resolve');
+  await a.changeReviewComment(review.id, root.id, {
+    kind: 'resolve', expectedVersion: recordVersion(local.comments[0]), expectedThread: threadVersion(local.comments, root.id),
+  });
+  await sa.sync(); await sb.receive();
+  let remote = await b.review(review.id);
+  assert.ok(isThreadResolved(remote.comments[0], remote.comments));
+  await b.changeReviewComment(review.id, root.id, {
+    kind: 'reopen', expectedVersion: recordVersion(remote.comments[0]), expectedThread: threadVersion(remote.comments, root.id),
+  });
+  await sb.sync(); await sa.receive();
+  local = await a.review(review.id); remote = await b.review(review.id);
+  assert.deepEqual(local, remote);
+  assert.equal(isThreadResolved(local.comments[0], local.comments), false);
+  assert.deepEqual(local.comments[0].changes?.map(item => item.kind), ['resolve', 'resolve', 'reopen']);
+  assert.deepEqual((await sa.receive()).updatedRefs, []);
+});
 
 test('divergent notes on different commits are both retained during sync', async t => {
   const { a, b, sa, sb } = await fixture(t);

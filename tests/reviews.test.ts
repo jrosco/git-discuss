@@ -9,9 +9,63 @@ import { Repository } from '../src/git/repository.js';
 import { Reviews } from '../src/core/reviews.js';
 import { createServer } from '../src/server/app.js';
 import { resolveIdentifier, shortIdentifier } from '../src/core/identifiers.js';
-import { commentBody, isDeleted, recordVersion, reviewTitle } from '../src/core/changes.js';
+import { commentBody, isDeleted, isThreadResolved, recordVersion, reviewTitle, threadRoot, threadStatus, threadVersion } from '../src/core/changes.js';
 
 const execute = promisify(execFile);
+
+test('threads resolve and reopen with history, stale-reply protection, and independent thread state', async t => {
+  const { directory, engine } = await fixture();
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const review = await engine.createReview({ title: 'Thread lifecycle', base: 'HEAD', head: 'HEAD' });
+  const root = await engine.addReviewComment(review.id, { body: 'Please explain this design' });
+  const oldThread = threadVersion((await engine.review(review.id)).comments, root.id);
+  const reply = await engine.addReviewComment(review.id, { body: 'Explanation', replyTo: root.id });
+  const nested = await engine.addReviewComment(review.id, { body: 'Follow-up', replyTo: reply.id });
+  const other = await engine.addReviewComment(review.id, { body: 'Separate question' });
+  await assert.rejects(engine.changeReviewComment(review.id, root.id, {
+    kind: 'resolve', expectedVersion: root.id, expectedThread: oldThread,
+  }), /thread changed/);
+  let state = await engine.review(review.id);
+  assert.equal(threadRoot(state.comments, nested.id)?.id, root.id);
+  await assert.rejects(engine.changeReviewComment(review.id, reply.id, {
+    kind: 'resolve', expectedVersion: reply.id, expectedThread: threadVersion(state.comments, reply.id),
+  }), /first comment/);
+  state = await engine.changeReviewComment(review.id, root.id, {
+    kind: 'resolve', expectedVersion: root.id, expectedThread: threadVersion(state.comments, root.id),
+  });
+  assert.ok(isThreadResolved(state.comments[0], state.comments));
+  assert.equal(threadStatus(state.comments[0])?.author.name, 'Review Tester');
+  assert.equal(state.comments[0].body, root.body);
+  assert.equal(isThreadResolved(state.comments.find(item => item.id === other.id)!, state.comments), false);
+  await engine.addReviewComment(review.id, { body: 'Another thread can continue', replyTo: other.id });
+  state = await engine.review(review.id);
+  assert.ok(isThreadResolved(state.comments[0], state.comments), 'Activity in another thread must not reopen this one');
+  await assert.rejects(engine.addReviewComment(review.id, { body: 'Must reopen first', replyTo: nested.id }), /thread is resolved/);
+  await assert.rejects(engine.changeReviewComment(review.id, root.id, {
+    kind: 'reopen', expectedVersion: root.id, expectedThread: threadVersion(state.comments, root.id),
+  }), /changed since/);
+  state = await engine.changeReviewComment(review.id, root.id, {
+    kind: 'reopen', expectedVersion: recordVersion(state.comments[0]), expectedThread: threadVersion(state.comments, root.id),
+  });
+  assert.equal(isThreadResolved(state.comments[0], state.comments), false);
+  assert.deepEqual(state.comments[0].changes?.map(item => item.kind), ['resolve', 'reopen']);
+  await engine.addReviewComment(review.id, { body: 'Reply after reopening', replyTo: nested.id });
+  state = await engine.review(review.id);
+  state = await engine.changeReviewComment(review.id, root.id, {
+    kind: 'resolve', expectedVersion: recordVersion(state.comments[0]), expectedThread: threadVersion(state.comments, root.id),
+  });
+  state = await engine.changeReviewComment(review.id, reply.id, { kind: 'edit', body: 'Revised explanation', expectedVersion: reply.id });
+  assert.equal(isThreadResolved(state.comments[0], state.comments), false, 'An edited reply must not remain hidden as resolved');
+  state = await engine.changeReviewComment(review.id, root.id, { kind: 'delete', expectedVersion: recordVersion(state.comments[0]) });
+  state = await engine.changeReviewComment(review.id, root.id, {
+    kind: 'resolve', expectedVersion: recordVersion(state.comments[0]), expectedThread: threadVersion(state.comments, root.id),
+  });
+  assert.ok(isDeleted(state.comments[0]));
+  assert.ok(isThreadResolved(state.comments[0], state.comments));
+  assert.equal(commentBody(state.comments.find(item => item.id === reply.id)!), 'Revised explanation');
+  const reopened = new Reviews(await Repository.open(directory));
+  assert.deepEqual(await reopened.review(review.id), state);
+});
 
 test('Git details include code identities, original timestamps, and all parent SHAs independently of note authors', async t => {
   const { directory, engine } = await fixture();
@@ -161,6 +215,14 @@ test('mutation API requires authentication and validates edits and deletion targ
   assert.equal((await fetch(endpoint, { method: 'POST', headers: { ...headers, Origin: 'https://example.test' }, body })).status, 403);
   assert.equal((await fetch(endpoint, { method: 'POST', headers, body })).status, 200);
   assert.equal((await fetch(endpoint, { method: 'POST', headers, body })).status, 400);
+  const current = await engine.review(review.id);
+  assert.equal((await fetch(endpoint, { method: 'POST', headers, body: JSON.stringify({
+    kind: 'resolve', expectedVersion: recordVersion(current.comments[0]),
+  }) })).status, 400);
+  assert.equal((await fetch(endpoint, { method: 'POST', headers, body: JSON.stringify({
+    kind: 'resolve', expectedVersion: recordVersion(current.comments[0]), expectedThread: threadVersion(current.comments, comment.id),
+  }) })).status, 200);
+  assert.ok(isThreadResolved((await engine.review(review.id)).comments[0], (await engine.review(review.id)).comments));
   assert.equal((await fetch(`${address}/api/reviews/${review.id}/change`, { method: 'POST', headers,
     body: JSON.stringify({ kind: 'delete', expectedVersion: review.id }) })).status, 200);
   assert.deepEqual(await (await fetch(`${address}/api/reviews`, { headers })).json(), []);
