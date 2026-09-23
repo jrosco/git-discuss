@@ -3,8 +3,6 @@ import { promisify } from 'node:util';
 import { mkdir, rmdir } from 'node:fs/promises';
 import path from 'node:path';
 import { commitListInputSchema, noteCountsInputSchema, type BranchChoice, type CommitPage, type NoteCounts } from '../core/models.js';
-import { activeCommentCount } from '../core/changes.js';
-import { parseComments } from '../core/reconciliation.js';
 
 const execute = promisify(execFile);
 export const NOTES_REF = 'refs/notes/git-discuss';
@@ -138,8 +136,7 @@ export class Repository {
       const [blob, commit] = line.split(' ');
       if (!Object.hasOwn(counts, commit)) continue;
       const text = await this.git('cat-file', 'blob', blob);
-      try { counts[commit] = activeCommentCount(parseComments(text, commit)); }
-      catch { counts[commit] = null; } // An unreadable discussion is not the same as zero notes.
+      counts[commit] = text.trim().length ? 1 : 0;
     }
     return counts;
   }
@@ -154,6 +151,23 @@ export class Repository {
     // Send discussion data over stdin, avoiding Windows command-line limits.
     await new Promise<void>((resolve, reject) => {
       const child = execFile('git', ['-C', this.root, 'notes', `--ref=${NOTES_REF}`, 'add', '-f', '-F', '-', commit],
+        { encoding: 'utf8' }, (error, _stdout, stderr) => {
+          if (error) reject(new Error(stderr.trim() || error.message));
+          else resolve();
+        });
+      child.stdin?.on('error', reject);
+      child.stdin?.end(contents);
+    });
+  }
+
+  async removeNote(commit: string): Promise<void> {
+    if (!await this.readNote(commit)) return;
+    await this.git('notes', `--ref=${NOTES_REF}`, 'remove', commit);
+  }
+
+  async appendNote(commit: string, contents: string): Promise<void> {
+    await new Promise<void>((resolve, reject) => {
+      const child = execFile('git', ['-C', this.root, 'notes', `--ref=${NOTES_REF}`, 'append', '-F', '-', commit],
         { encoding: 'utf8' }, (error, _stdout, stderr) => {
           if (error) reject(new Error(stderr.trim() || error.message));
           else resolve();

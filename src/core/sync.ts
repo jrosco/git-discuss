@@ -1,14 +1,31 @@
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { NOTES_REF, Repository } from '../git/repository.js';
-import { syncInputSchema, type Comment, type Review, type SyncResult, type ReceiveResult } from './models.js';
-import { canonical, mergeComments, mergeReviews, parseComments, parseReview } from './reconciliation.js';
+import { syncInputSchema, type Review, type SyncResult, type ReceiveResult } from './models.js';
+import { canonical, mergeReviews, parseReview } from './reconciliation.js';
 
 const REVIEWS = 'refs/git-discuss/reviews/';
 type RefMap = Map<string, string>;
 
 export class Synchronization {
   constructor(readonly repository: Repository) {}
+
+  private async latestSide(localOid: string | undefined, remoteOid: string | undefined): Promise<'local' | 'remote'> {
+    if (!localOid) return 'remote';
+    if (!remoteOid) return 'local';
+    if (await this.repository.isAncestor(localOid, remoteOid)) return 'remote';
+    if (await this.repository.isAncestor(remoteOid, localOid)) return 'local';
+    return 'remote';
+  }
+
+  private async latestNote(local: string | undefined, remote: string | undefined,
+    localOid: string | undefined, remoteOid: string | undefined): Promise<{ note: string | undefined; overwritten: 'local' | 'remote' | null }> {
+    if (local === undefined) return { note: remote, overwritten: null };
+    if (remote === undefined) return { note: local, overwritten: null };
+    if (local === remote) return { note: local, overwritten: null };
+    const latest = await this.latestSide(localOid, remoteOid);
+    return latest === 'remote' ? { note: remote, overwritten: 'local' } : { note: local, overwritten: 'remote' };
+  }
 
   private async refs(...prefixes: string[]): Promise<RefMap> {
     const output = await this.repository.git('for-each-ref', '--format=%(refname) %(objectname) %(symref)', ...prefixes);
@@ -23,8 +40,8 @@ export class Synchronization {
     if (ref !== NOTES_REF) z.uuid().parse(ref.slice(REVIEWS.length));
   }
 
-  private async readNotes(oid?: string, signal?: AbortSignal): Promise<Map<string, Comment[]>> {
-    const notes = new Map<string, Comment[]>();
+  private async readNotes(oid?: string, signal?: AbortSignal): Promise<Map<string, string>> {
+    const notes = new Map<string, string>();
     if (!oid) return notes;
     const tree = await this.repository.git('ls-tree', '-r', '--full-tree', oid);
     for (const line of tree ? tree.split('\n') : []) {
@@ -34,7 +51,7 @@ export class Synchronization {
       if (!match || !commit || !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(commit) || notes.has(commit)) {
         throw new Error('Unsupported Git Discuss notes tree. Sync stopped without dropping any files.');
       }
-      notes.set(commit, parseComments(await this.repository.git('cat-file', 'blob', match[1]), commit));
+      notes.set(commit, await this.repository.git('cat-file', 'blob', match[1]));
     }
     return notes;
   }
@@ -60,12 +77,21 @@ export class Synchronization {
     if (ref === NOTES_REF) {
       const left = await this.readNotes(local, signal);
       const right = await this.readNotes(remote, signal);
+      const latest = await this.latestSide(local, remote);
       for (const commit of new Set([...left.keys(), ...right.keys()])) {
-        files.set(commit, canonical(mergeComments(left.get(commit) ?? [], right.get(commit) ?? [])));
-        retained.add(commit);
+        const localNote = left.get(commit);
+        const remoteNote = right.get(commit);
+        if (localNote === undefined && remoteNote === undefined) continue;
+        const note = localNote === undefined ? latest === 'remote' ? remoteNote : undefined
+          : remoteNote === undefined ? latest === 'local' ? localNote : undefined
+            : (await this.latestNote(localNote, remoteNote, local, remote)).note;
+        if (note !== undefined && note.length) {
+          files.set(commit, note);
+          retained.add(commit);
+        }
       }
-      const same = (notes: Map<string, Comment[]>) => notes.size === files.size &&
-        [...notes].every(([commit, comments]) => files.get(commit) === canonical(comments));
+      const same = (notes: Map<string, string>) => notes.size === files.size &&
+        [...notes].every(([commit, note]) => files.get(commit) === note);
       sameLocal = same(left); sameRemote = same(right);
     } else {
       const id = ref.slice(REVIEWS.length);
@@ -119,7 +145,7 @@ export class Synchronization {
       const specs: string[] = [];
       if (names.includes(NOTES_REF)) specs.push(`${NOTES_REF}:${staging}notes`);
       if (names.some(ref => ref.startsWith(REVIEWS))) specs.push(`${REVIEWS}*:${staging}reviews/*`);
-      if (!specs.length) return { remote, updatedRefs: [] };
+      if (!specs.length) return { remote, updatedRefs: [], updatedReviewIds: [], updatedNoteCommits: [], noteOverwriteCommits: [] };
       await this.repository.networkWithSignal(signal, 'fetch', '--atomic', '--no-tags', '--no-write-fetch-head', '--refmap=', remote, ...specs);
       signal?.throwIfAborted();
       const fetched = await this.refs(staging);
@@ -140,7 +166,28 @@ export class Synchronization {
         if (next !== left) targets.set(ref, next);
       }
       signal?.throwIfAborted();
-      if (!targets.size) return { remote, updatedRefs: [] };
+      if (!targets.size) return { remote, updatedRefs: [], updatedReviewIds: [], updatedNoteCommits: [], noteOverwriteCommits: [] };
+      const updatedReviewIds = [...targets.keys()].filter(ref => ref.startsWith(REVIEWS))
+        .map(ref => ref.slice(REVIEWS.length));
+      const updatedNoteCommits: string[] = [];
+      const noteOverwriteCommits: string[] = [];
+      if (targets.has(NOTES_REF)) {
+        const previous = checked.get(NOTES_REF);
+        const next = targets.get(NOTES_REF)!;
+        const left = await this.readNotes(previous, signal);
+        const right = await this.readNotes(next, signal);
+        for (const commit of new Set([...left.keys(), ...right.keys()])) {
+          if ((left.get(commit) ?? '') !== (right.get(commit) ?? '')) updatedNoteCommits.push(commit);
+        }
+        const remoteOid = fetched.get(`${staging}notes`);
+        for (const commit of new Set([...left.keys(), ...right.keys()])) {
+          const previousNote = left.get(commit);
+          const publishedNote = right.get(commit);
+          if (previousNote === publishedNote || previousNote === undefined || publishedNote === undefined) continue;
+          const overwritten = await this.latestNote(previousNote, publishedNote, previous, remoteOid).then(item => item.overwritten);
+          if (overwritten === 'local') noteOverwriteCommits.push(commit);
+        }
+      }
       await this.repository.withWriteLock(async () => {
         signal?.throwIfAborted();
         const commands = [...checked].map(([ref, previous]) => {
@@ -150,7 +197,7 @@ export class Synchronization {
         // If any local input changed while preparing, the whole transaction fails. The next check retries.
         await this.repository.gitInput(`start\noption no-deref\n${commands.join('\n')}\nprepare\ncommit\n`, 'update-ref', '--stdin');
       });
-      return { remote, updatedRefs: [...targets.keys()] };
+      return { remote, updatedRefs: [...targets.keys()], updatedReviewIds, updatedNoteCommits, noteOverwriteCommits };
     } finally {
       const staged = await this.refs(staging);
       if (staged.size) await this.repository.gitInput(

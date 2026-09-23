@@ -100,16 +100,8 @@ export class Reviews {
   }
 
   async changeCommitComment(ref: string, commentId: string, input: CommentMutation): Promise<Conversation> {
-    const parsed = commentMutationSchema.parse(input);
-    const commit = await this.repository.resolve(ref);
-    return this.repository.withWriteLock(async () => {
-      const comments = await this.comments(commit);
-      const resolved = resolveIdentifier(commentId, comments.map(item => item.id), 'Comment');
-      const index = comments.findIndex(item => item.id === resolved);
-      comments[index] = await this.changeCommentRecord(comments[index], parsed);
-      await this.repository.writeNote(commit, JSON.stringify(comments, null, 2));
-      return { commit, subject: await this.repository.git('show', '-s', '--format=%s', commit, '--'), comments };
-    });
+    void ref; void commentId; void input; void commentMutationSchema;
+    throw new Error('Commit notes are plain text and no longer support per-comment edit endpoints. Use Save note on the commit instead.');
   }
 
   private async revision(input: z.input<typeof revisionInputSchema>) {
@@ -171,26 +163,14 @@ export class Reviews {
     });
   }
 
-  private async comments(commit: string): Promise<Comment[]> {
-    const note = await this.repository.readNote(commit);
-    if (!note) return [];
-    const comments = z.array(commentSchema).parse(JSON.parse(note));
-    const seen = new Set<string>();
-    for (const item of comments) {
-      if (item.commit !== commit || seen.has(item.id) || (item.replyTo && !seen.has(item.replyTo))) {
-        throw new Error('Invalid discussion history: commit, comment ID, or reply relationship.');
-      }
-      seen.add(item.id);
-    }
-    return comments;
-  }
-
   async conversation(ref: string): Promise<Conversation> {
     const commit = await this.repository.resolve(ref);
+    const note = await this.repository.readNote(commit);
     return {
       commit,
       subject: await this.repository.git('show', '-s', '--format=%s', commit, '--'),
-      comments: await this.comments(commit),
+      comments: [],
+      note: note || null,
     };
   }
 
@@ -198,18 +178,22 @@ export class Reviews {
     const parsed = addCommentSchema.parse(input);
     const commit = await this.repository.resolve(parsed.commit);
     return this.repository.withWriteLock(async () => {
-      const comments = await this.comments(commit);
-      if (parsed.replyTo && !comments.some(comment => comment.id === parsed.replyTo)) {
-        throw new Error('Reply target does not exist on this commit.');
-      }
       const name = await this.repository.git('config', '--get', 'user.name');
       const email = await this.repository.git('config', '--get', 'user.email');
+      const existing = await this.repository.readNote(commit);
+      const body = parsed.body;
+      if (parsed.action === 'add' && existing) throw new Error('A note already exists on this commit. Choose Edit or Append.');
+      if (parsed.action === 'edit' && !existing) throw new Error('No note exists on this commit yet. Choose Add note.');
+      if (parsed.action === 'append' && !existing) throw new Error('No note exists on this commit yet. Add a note before appending.');
+      if (parsed.action !== 'delete' && !body.trim()) throw new Error('Note text cannot be empty.');
       const comment = commentSchema.parse({
         schema: 1, type: 'comment', id: randomUUID(), commit,
         author: { name, email }, createdAt: new Date().toISOString(),
-        replyTo: parsed.replyTo, body: parsed.body,
+        replyTo: null, body: body.trim() || '(empty note)',
       });
-      await this.repository.writeNote(commit, JSON.stringify([...comments, comment], null, 2));
+      if (parsed.action === 'delete') await this.repository.removeNote(commit);
+      else if (parsed.action === 'append') await this.repository.appendNote(commit, body);
+      else await this.repository.writeNote(commit, body);
       return comment;
     });
   }

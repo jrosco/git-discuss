@@ -62,6 +62,8 @@ details p { font-size: 13px; }
 .card { border: 1px solid var(--border); border-radius: 6px; background: var(--bg); }
 .secondary-button { background: var(--subtle); color: var(--fg); border-color: var(--border); }
 .secondary-button:hover { background: var(--hover); border-color: var(--hover-border); }
+.danger-button { color: var(--error-fg); border-color: var(--error-border); background: var(--error-bg); }
+.danger-button:hover { background: color-mix(in srgb, var(--error-bg) 70%, var(--hover)); border-color: var(--error-border); }
 .text-button { background: transparent; color: var(--link); padding: 4px 0; border: 0; box-shadow: none; }
 .text-button:hover { background: transparent; text-decoration: underline; }
 .count, .version-badge { display: inline-block; background: var(--counter); border-radius: 12px; padding: 1px 8px; color: var(--code); font-size: 12px; font-weight: 500; }
@@ -86,6 +88,7 @@ details p { font-size: 13px; }
 .background-error pre { white-space: pre-wrap; overflow-wrap: anywhere; }
 .updates-notice { min-height: 68px; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 14px; margin: 0 0 16px; border: 1px solid var(--info-border); border-radius: 6px; background: var(--info-bg); font-size: 13px; }
 .updates-notice small { display: block; }
+.updates-summary { margin: 4px 0 0; font-size: 12px; color: var(--text); }
 .updates-notice button { flex-shrink: 0; }
 .workspace-layout { display: grid; grid-template-columns: minmax(0, 1fr) 290px; gap: 24px 32px; align-items: start; }
 .workspace-layout > .workspace-nav { grid-column: 1 / -1; margin-bottom: 0; }
@@ -179,6 +182,26 @@ details p { font-size: 13px; }
 .avatar { display: grid; place-items: center; flex-shrink: 0; width: 32px; height: 32px; border: 1px solid var(--avatar-border); border-radius: 50%; background: var(--info-bg); color: var(--info-fg); font-weight: 600; }
 .comment-body { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.7; font-size: 14px; }
 .comment-actions, .review-management { display: flex; flex-wrap: wrap; gap: 16px; margin: 12px 0; }
+.discussion > .comment-actions { margin: 0; padding: 0 16px 12px; }
+.comment-actions .text-button {
+  background: var(--subtle);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 1px 0 var(--shadow);
+  padding: 6px 10px;
+  text-decoration: none;
+}
+.comment-actions .text-button:hover { background: var(--hover); border-color: var(--hover-border); text-decoration: none; }
+.comment-actions .text-button.danger-text {
+  color: var(--error-fg);
+  border-color: var(--error-border);
+  background: var(--error-bg);
+}
+.comment-actions .text-button.danger-text:hover {
+  background: color-mix(in srgb, var(--error-bg) 70%, var(--hover));
+  border-color: var(--error-border);
+}
 .danger-text { color: var(--error-fg); }
 .deleted-comment { color: var(--muted); font-style: italic; }
 .comment-editor { margin: 16px 0; }

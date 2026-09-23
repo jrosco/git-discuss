@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import type { BranchChoice, Comment, CommentMutation, Review } from '../core/models.js';
+import type { BackgroundUpdateStatus, BranchChoice, Comment, CommentMutation, Review } from '../core/models.js';
 import { commentBody, isDeleted, recordVersion } from '../core/changes.js';
 import { errorMessage } from './api.js';
 
@@ -86,10 +86,54 @@ export function useEditingGuard() {
   return { editing: ids.length > 0, onEditingChange };
 }
 
-export function UpdatesNotice({ available, editing, busy, onShow }: { available: boolean; editing: boolean; busy: boolean; onShow: () => void }) {
+export function UpdatesNotice({ available, editing, busy, onShow, summary, onOpenReview, onOpenCommit }: {
+  available: boolean;
+  editing: boolean;
+  busy: boolean;
+  onShow: () => void;
+  summary: BackgroundUpdateStatus['latestChangeSummary'];
+  onOpenReview?: (id: string) => void;
+  onOpenCommit?: (id: string) => void;
+}) {
   if (!available) return null;
+  const reviewSamples = summary?.sampleReviewIds.map(id => ({ id, short: id.slice(0, 8) })) ?? [];
+  const noteSamples = summary?.sampleNoteCommits.map(id => ({ id, short: id.slice(0, 8) })) ?? [];
+  const overwrittenSamples = summary?.noteOverwriteCommits.map(id => id.slice(0, 8)) ?? [];
+  const listedReviewCount = reviewSamples.length;
+  const extraReviewCount = Math.max(0, (summary?.reviewsUpdated ?? 0) - listedReviewCount);
+  const heading = summary ?
+    summary.notesUpdated && summary.reviewsUpdated > 0 ? 'New feedback available in Reviews and Change notes' :
+      summary.reviewsUpdated > 0 ? 'New feedback available in Reviews' :
+        summary.notesUpdated ? 'New feedback available in Change notes' :
+          'New feedback available'
+    : 'New feedback available';
+  const detail = summary ?
+    summary.notesUpdated && summary.reviewsUpdated > 0
+      ? `${summary.reviewsUpdated} ${summary.reviewsUpdated === 1 ? 'review' : 'reviews'} updated and change notes updated.`
+      : summary.reviewsUpdated > 0
+        ? `${summary.reviewsUpdated} ${summary.reviewsUpdated === 1 ? 'review' : 'reviews'} updated.`
+        : summary.notesUpdated
+          ? 'Change notes updated.'
+          : ''
+    : '';
+  const reviewList = listedReviewCount ?
+    `Updated review IDs: ${reviewSamples.map(item => item.short).join(', ')}${extraReviewCount ? ` (+${extraReviewCount} more)` : ''}.`
+    : '';
+  const noteList = noteSamples.length ? `Updated change-note commits: ${noteSamples.map(item => item.short).join(', ')}.` : '';
+  const overwriteList = overwrittenSamples.length
+    ? `Latest-writer wins replaced your local note text on: ${overwrittenSamples.join(', ')}.`
+    : '';
   return <div className="updates-notice">
-    <div><strong>New feedback available</strong><small>{editing ? 'Finish or cancel your edit before showing updates.' : 'Your draft and selected version will stay here.'}</small></div>
+    <div><strong>{heading}</strong>
+      {(detail || reviewList || noteList || overwriteList) && <p className="updates-summary"><strong>Changed:</strong> {detail} {reviewList} {noteList} {overwriteList}</p>}
+      <small>{editing ? 'Finish or cancel your edit before showing updates.' : 'Your draft and selected version will stay here.'}</small>
+      {onOpenReview && listedReviewCount > 0 && <div className="row">{reviewSamples.map(item =>
+        <button key={item.id} type="button" className="text-button" disabled={editing || busy} onClick={() => onOpenReview(item.id)}>Open {item.short}</button>)}
+      </div>}
+      {onOpenCommit && noteSamples.length > 0 && <div className="row">{noteSamples.map(item =>
+        <button key={item.id} type="button" className="text-button" disabled={editing || busy} onClick={() => onOpenCommit(item.id)}>Open {item.short}</button>)}
+      </div>}
+    </div>
     <button type="button" className="secondary-button" disabled={editing || busy} onClick={onShow}>Show updates</button>
   </div>;
 }

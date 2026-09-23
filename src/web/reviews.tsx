@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
-import type { BranchChoice, Comment, Review, RevisionDiff, SyncResult } from '../core/models.js';
+import type { BackgroundUpdateStatus, BranchChoice, Comment, Review, RevisionDiff, SyncResult } from '../core/models.js';
 import { api, errorMessage } from './api.js';
 import { CodeSource, CommentSubmitActions, ErrorNotice, SavedButUnshared, SavedNotice, Thread, UpdatesNotice, useEditingGuard } from './components.js';
 import { submitFeedback, type ComposerSharing } from './submission.js';
@@ -76,8 +76,14 @@ function VersionForm({ review, onSave, onCancel }: {
   </form>;
 }
 
-export function ReviewsWorkspace({ syncVersion, backgroundRevision, sharing, sidebarTarget, onSaved, onShare }: {
-  syncVersion: number; backgroundRevision: number; sharing: ComposerSharing; sidebarTarget: HTMLElement | null; onSaved: () => void; onShare: () => void;
+export function ReviewsWorkspace({ syncVersion, backgroundRevision, backgroundSummary, sharing, sidebarTarget, onSaved, onShare }: {
+  syncVersion: number;
+  backgroundRevision: number;
+  backgroundSummary: BackgroundUpdateStatus['latestChangeSummary'];
+  sharing: ComposerSharing;
+  sidebarTarget: HTMLElement | null;
+  onSaved: () => void;
+  onShare: () => void;
 }) {
   const [reviews, setReviews] = useState<Review[]>([]);
   const [review, setReview] = useState<Review | null>(null);
@@ -127,7 +133,7 @@ export function ReviewsWorkspace({ syncVersion, backgroundRevision, sharing, sid
     setReviews(current => [...current.filter(item => item.id !== next.id), next]);
     setReview(next); selectedId.current = next.id;
   }
-  async function refresh() {
+  async function refresh(options: { announce?: boolean } = {}) {
     if (hasEdits) { setDeferredRefresh(true); return; }
     const scroll = { left: window.scrollX, top: window.scrollY };
     setBusy(true); setError('');
@@ -138,6 +144,7 @@ export function ReviewsWorkspace({ syncVersion, backgroundRevision, sharing, sid
       if (current) setReview(current);
       else if (selectedId.current) setReview(await api<Review>(`reviews/${selectedId.current}`));
       setSeenRevision(backgroundRevision); setDeferredRefresh(false);
+      if (options.announce) setNotice('Latest updates are now shown.');
       requestAnimationFrame(() => window.scrollTo({ ...scroll, behavior: 'instant' }));
     } catch (error) { setError(errorMessage(error)); }
     finally { setBusy(false); }
@@ -156,6 +163,21 @@ export function ReviewsWorkspace({ syncVersion, backgroundRevision, sharing, sid
     } catch (error) { setError(errorMessage(error)); }
     finally { setBusy(false); }
   }
+  async function showAndOpenReview(id: string) {
+    if (hasEdits || busy) return;
+    await refresh();
+    await openReview(id);
+    setNotice(`Latest updates are now shown. Opened review ${id.slice(0, 8)}.`);
+  }
+
+  function handleShowUpdates() {
+    const firstUpdated = backgroundSummary?.sampleReviewIds[0];
+    if (firstUpdated && (review?.id !== firstUpdated || view !== 'review')) {
+      void showAndOpenReview(firstUpdated);
+      return;
+    }
+    void refresh({ announce: true });
+  }
   function chooseVersion(id: string) {
     if (id !== revisionId && body && !window.confirm('Change the version you are discussing and discard your unsaved feedback?')) return;
     setRevisionId(id); setBody(''); setReplyTo(null);
@@ -166,7 +188,8 @@ export function ReviewsWorkspace({ syncVersion, backgroundRevision, sharing, sid
   const placeDetails = (content: ReactNode) => sidebarTarget ? createPortal(content, sidebarTarget) : content;
 
   return <>
-    <UpdatesNotice available={backgroundRevision > seenRevision || deferredRefresh} editing={hasEdits} busy={busy} onShow={() => void refresh()} />
+    <UpdatesNotice available={backgroundRevision > seenRevision || deferredRefresh} summary={backgroundSummary} editing={hasEdits} busy={busy}
+      onShow={handleShowUpdates} onOpenReview={id => { void showAndOpenReview(id); }} />
     <ErrorNotice message={error} onRetry={() => void refresh()} />
     <SavedNotice message={notice} onShare={onShare} />
     {view === 'list' && <>

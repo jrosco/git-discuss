@@ -1,9 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
-import type { BranchChoice, CommitPage, Comment, Conversation, NoteCounts, SyncResult } from '../core/models.js';
+import type { BackgroundUpdateStatus, BranchChoice, Comment, CommitPage, Conversation, NoteCounts, SyncResult } from '../core/models.js';
 import { api, errorMessage } from './api.js';
-import { BranchOptions, CommentSubmitActions, ErrorNotice, SavedButUnshared, SavedNotice, Thread, UpdatesNotice, useEditingGuard } from './components.js';
+import { BranchOptions, CommentSubmitActions, ErrorNotice, SavedButUnshared, SavedNotice, UpdatesNotice } from './components.js';
 import { submitFeedback, type ComposerSharing } from './submission.js';
-import { activeCommentCount, commentBody } from '../core/changes.js';
 
 function ChangePicker({ initialCommit, conversation, syncVersion, backgroundRevision, busy, onLoad }: {
   initialCommit: string; conversation: Conversation | null; syncVersion: number; backgroundRevision: number; busy: boolean; onLoad: (ref: string) => Promise<void>;
@@ -32,7 +31,7 @@ function ChangePicker({ initialCommit, conversation, syncVersion, backgroundRevi
     let active = true;
     setCountError('');
     if (conversation) setHistory(current => current ? { ...current, commits: current.commits.map(item =>
-      item.commit === conversation.commit ? { ...item, noteCount: activeCommentCount(conversation.comments) } : item) } : current);
+      item.commit === conversation.commit ? { ...item, noteCount: conversation.note?.trim() ? 1 : 0 } : item) } : current);
     const commits = history.commits.map(item => item.commit);
     void (async () => {
       const counts: NoteCounts = {};
@@ -71,7 +70,7 @@ function ChangePicker({ initialCommit, conversation, syncVersion, backgroundRevi
       <ul className="change-list" aria-label="Saved changes, newest first">{history.commits.map(item => <li key={item.commit}>
         <button type="button" className="change-card" disabled={disabled} aria-current={currentCommit === item.commit ? 'true' : undefined} onClick={() => void onLoad(item.commit)}>
           <span className="change-title"><span>{item.subject || 'Untitled change'}</span><span className="change-badges">
-            <span className={`note-count${item.noteCount ? ' has-notes' : ''}`} title="Comments and replies, excluding deleted entries">
+            <span className={`note-count${item.noteCount ? ' has-notes' : ''}`} title="Notes, excluding deleted entries">
               <svg aria-hidden="true" viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.3"><path d="M3 2.5h10a1 1 0 0 1 1 1v7a1 1 0 0 1-1 1H7l-4 3v-3H3a1 1 0 0 1-1-1v-7a1 1 0 0 1 1-1Z" /></svg>
               {item.noteCount === null ? 'Notes unavailable' : `${item.noteCount} ${item.noteCount === 1 ? 'note' : 'notes'}`}
             </span>
@@ -93,34 +92,48 @@ function ChangePicker({ initialCommit, conversation, syncVersion, backgroundRevi
   </section>;
 }
 
-export function CommitNotesWorkspace({ initialCommit, syncVersion, backgroundRevision, sharing, onSaved, onShare }: {
-  initialCommit: string; syncVersion: number; backgroundRevision: number; sharing: ComposerSharing; onSaved: () => void; onShare: () => void;
+export function CommitNotesWorkspace({ initialCommit, syncVersion, backgroundRevision, backgroundSummary, sharing, onSaved, onShare }: {
+  initialCommit: string;
+  syncVersion: number;
+  backgroundRevision: number;
+  backgroundSummary: BackgroundUpdateStatus['latestChangeSummary'];
+  sharing: ComposerSharing;
+  onSaved: () => void;
+  onShare: () => void;
 }) {
   const [conversation, setConversation] = useState<Conversation | null>(null);
   const selectedCommit = useRef(initialCommit);
-  const [body, setBody] = useState('');
-  const [replyTo, setReplyTo] = useState<Comment | null>(null);
+  const [noteBody, setNoteBody] = useState('');
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [busy, setBusy] = useState(true);
   const [seenRevision, setSeenRevision] = useState(0);
   const [deferredRefresh, setDeferredRefresh] = useState(false);
-  const editGuard = useEditingGuard();
   const [sharingNow, setSharingNow] = useState(false);
   const [shareError, setShareError] = useState('');
+  const [mode, setMode] = useState<'idle' | 'add' | 'edit' | 'append'>('idle');
   useEffect(() => { setShareError(''); }, [sharing.successVersion]);
 
-  async function submitComment(shareNow: boolean) {
+  function actionForMode(current: 'idle' | 'add' | 'edit' | 'append') {
+    if (current === 'idle') return 'set' as const;
+    if (current === 'append') return 'append' as const;
+    return current;
+  }
+
+  async function submitNote(shareNow: boolean) {
     if (!conversation || busy || (shareNow && !sharing.remote)) return;
     const remote = sharing.remote;
     setBusy(true); setError(''); setNotice(''); setShareError(''); setSharingNow(shareNow);
     if (shareNow) sharing.onSharing(true);
     try {
       const result = await submitFeedback(
-        () => api<Comment>('comments', { commit: conversation.commit, body, replyTo: replyTo?.id ?? null }),
-        comment => {
-          setConversation({ ...conversation, comments: [...conversation.comments, comment] }); setBody(''); setReplyTo(null);
-          setNotice('Note saved on this computer.'); onSaved();
+        () => api<Comment>('comments', { commit: conversation.commit, body: noteBody, action: actionForMode(mode) }),
+        async () => {
+          const next = await api<Conversation>(`conversation?commit=${encodeURIComponent(conversation.commit)}`);
+          setConversation(next); setNoteBody(next.note ?? '');
+          setNotice('Note saved on this computer.');
+          setMode('idle');
+          onSaved();
         },
         shareNow ? () => api<SyncResult>('sync', { remote }) : undefined,
       );
@@ -129,14 +142,15 @@ export function CommitNotesWorkspace({ initialCommit, syncVersion, backgroundRev
     } catch (error) { setError(errorMessage(error)); }
     finally { setBusy(false); setSharingNow(false); if (shareNow) sharing.onSharing(false); }
   }
-  async function refresh() {
-    if (editGuard.editing) { setDeferredRefresh(true); return; }
+  async function refresh(options: { announce?: boolean } = {}) {
     const scroll = { left: window.scrollX, top: window.scrollY };
     setBusy(true); setError('');
     try {
       const next = await api<Conversation>(`conversation?commit=${encodeURIComponent(selectedCommit.current)}`);
-      selectedCommit.current = next.commit; setConversation(next);
+      selectedCommit.current = next.commit; setConversation(next); setNoteBody(next.note ?? '');
+      setMode('idle');
       setSeenRevision(backgroundRevision); setDeferredRefresh(false);
+      if (options.announce) setNotice('Latest updates are now shown.');
       requestAnimationFrame(() => window.scrollTo({ ...scroll, behavior: 'instant' }));
     } catch (error) { setError(errorMessage(error)); }
     finally { setBusy(false); }
@@ -147,16 +161,50 @@ export function CommitNotesWorkspace({ initialCommit, syncVersion, backgroundRev
     try {
       const next = await api<Conversation>(`conversation?commit=${encodeURIComponent(commit)}`);
       if (next.commit !== conversation?.commit) {
-        if (body && !window.confirm('Open another change and discard your unsaved note?')) return;
-        setBody(''); setReplyTo(null);
+        if (noteBody !== (conversation?.note ?? '') && !window.confirm('Open another change and discard your unsaved note text?')) return;
       }
-      selectedCommit.current = next.commit; setConversation(next);
+      selectedCommit.current = next.commit; setConversation(next); setNoteBody(next.note ?? '');
+      setMode('idle');
       requestAnimationFrame(() => document.getElementById('change-notes-heading')?.focus());
     } catch (error) { setError(errorMessage(error)); }
     finally { setBusy(false); }
   }
+  async function showAndOpenCommit(commit: string) {
+    if (busy) return;
+    await load(commit);
+    setNotice(`Latest updates are now shown. Opened change ${commit.slice(0, 8)}.`);
+  }
+
+  function handleShowUpdates() {
+    const firstUpdated = backgroundSummary?.sampleNoteCommits[0];
+    if (firstUpdated && conversation?.commit !== firstUpdated) {
+      void showAndOpenCommit(firstUpdated);
+      return;
+    }
+    void refresh({ announce: true });
+  }
+  async function clearNote() {
+    if (!conversation || busy) return;
+    if (!window.confirm('Delete this commit note text? Previous text remains in Git history.')) return;
+    setBusy(true); setError('');
+    try {
+      await api<Comment>('comments', { commit: conversation.commit, body: '', action: 'delete' });
+      const next = await api<Conversation>(`conversation?commit=${encodeURIComponent(conversation.commit)}`);
+      setConversation(next); setNoteBody('');
+      setMode('idle');
+      setNotice('Note deleted on this computer.'); onSaved();
+    } catch (error) { setError(errorMessage(error)); }
+    finally { setBusy(false); }
+  }
+  const canShowEditor = mode !== 'idle';
+  const canSave = mode === 'append' || mode === 'add'
+    ? Boolean(noteBody.trim())
+    : mode === 'edit'
+      ? Boolean(noteBody.trim()) && noteBody !== (conversation?.note ?? '')
+      : false;
   return <>
-    <UpdatesNotice available={backgroundRevision > seenRevision || deferredRefresh} editing={editGuard.editing} busy={busy} onShow={() => void refresh()} />
+    <UpdatesNotice available={backgroundRevision > seenRevision || deferredRefresh} summary={backgroundSummary} editing={false} busy={busy}
+      onShow={handleShowUpdates} onOpenCommit={commit => { void showAndOpenCommit(commit); }} />
     <ChangePicker initialCommit={initialCommit} conversation={conversation} syncVersion={syncVersion} backgroundRevision={backgroundRevision} busy={busy} onLoad={load} />
     <ErrorNotice message={error} onRetry={() => void refresh()} />
     <SavedNotice message={notice} onShare={onShare} />
@@ -168,34 +216,35 @@ export function CommitNotesWorkspace({ initialCommit, syncVersion, backgroundRev
         <p>These notes stay with this exact code snapshot.</p>
         <details className="technical-details"><summary>Git details</summary><p>Commit ID: <code>{conversation.commit}</code></p><p>Storage: <code>refs/notes/git-discuss</code></p></details>
       </header>
-      <section className="card discussion" aria-label="Notes on this change">
-        <div className="section-header"><h3>Notes <span className="count">{activeCommentCount(conversation.comments)}</span></h3>
+      <section className="card discussion" aria-label="Commit notes for this change">
+        <div className="section-header"><h3>Note</h3>
           <button type="button" className="text-button" disabled={busy} onClick={() => void refresh()}>Refresh notes</button></div>
-        {conversation.comments.length === 0 && <div className="empty"><h3>No notes yet</h3><p>Capture a question or explain a decision about this saved change.</p></div>}
-        {conversation.comments.filter(comment => !comment.replyTo).map(comment => <Thread key={comment.id} comment={comment} comments={conversation.comments} disabled={busy}
-          onEditingChange={editGuard.onEditingChange}
-          onChange={async (item, mutation) => {
-            setBusy(true);
-            try {
-              const next = await api<Conversation>(`commits/${conversation.commit}/comments/${item.id}/change`, mutation);
-              setConversation(next); if (replyTo?.id === item.id) setReplyTo(mutation.kind === 'delete' ? null : next.comments.find(comment => comment.id === item.id) ?? null);
-              setNotice(mutation.kind === 'delete' ? 'Comment deleted on this computer.' : 'Comment updated on this computer.'); onSaved();
-            } finally { setBusy(false); }
-          }}
-          onReply={item => { setReplyTo(item); document.getElementById('note-body')?.focus(); }} />)}
+        {!conversation.note && <div className="empty"><h3>No note yet</h3><p>Add a plain Git note for this saved change.</p></div>}
+        {conversation.note && <pre className="diff-patch" aria-label="Current commit note"><code>{conversation.note}</code></pre>}
+        {!conversation.note && <div className="form-actions"><button type="button" className="secondary-button" disabled={busy} onClick={() => {
+          setMode('add'); setNoteBody(''); requestAnimationFrame(() => document.getElementById('note-body')?.focus());
+        }}>Add note</button></div>}
+        {conversation.note && <div className="comment-actions">
+          <button type="button" className="text-button" disabled={busy} onClick={() => {
+            setMode('edit'); setNoteBody(conversation.note ?? ''); requestAnimationFrame(() => document.getElementById('note-body')?.focus());
+          }}>Edit</button>
+          <button type="button" className="text-button" disabled={busy} onClick={() => {
+            setMode('append'); setNoteBody(''); requestAnimationFrame(() => document.getElementById('note-body')?.focus());
+          }}>Append</button>
+          <button type="button" className="text-button danger-text" disabled={busy} onClick={() => void clearNote()}>Delete</button>
+        </div>}
       </section>
       <SavedButUnshared error={shareError} onShare={onShare} />
-      <form className="card composer" onSubmit={event => {
+      {canShowEditor && <form className="card composer" onSubmit={event => {
         event.preventDefault();
         const submitter = (event.nativeEvent as SubmitEvent).submitter as HTMLButtonElement | null;
-        void submitComment(submitter?.value === 'share');
+        void submitNote(submitter?.value === 'share');
       }}>
-        <fieldset disabled={busy}><label htmlFor="note-body">{replyTo ? `Reply to ${replyTo.author.name}` : 'Leave a note'}</label>
-          {replyTo && <div className="reply-context"><p>{commentBody(replyTo)}</p><button type="button" className="text-button" onClick={() => setReplyTo(null)}>Cancel reply</button></div>}
-          <textarea id="note-body" value={body} onChange={event => setBody(event.target.value)} placeholder="What should the next person know about this change?" required maxLength={20000} rows={5} />
-          <CommentSubmitActions busy={busy} sharingNow={sharingNow} canSave={Boolean(body.trim())} remote={sharing.remote} onChooseRemote={onShare} />
+        <fieldset disabled={busy}><label htmlFor="note-body">{mode === 'add' ? 'Add note text' : mode === 'append' ? 'Append note text' : 'Edit note text'}</label>
+          <textarea id="note-body" value={noteBody} onChange={event => setNoteBody(event.target.value)} placeholder={mode === 'append' ? 'Write text to append to the current note' : 'Write plain note text for this commit'} maxLength={20000} rows={6} />
+          <CommentSubmitActions busy={busy} sharingNow={sharingNow} canSave={canSave} remote={sharing.remote} onChooseRemote={onShare} />
         </fieldset>
-      </form>
+      </form>}
     </>}
   </>;
 }

@@ -12,7 +12,7 @@ import { reviewTitle } from './core/changes.js';
 const program = new Command()
   .name('git discuss')
   .description('Local-first Git-backed commit discussions')
-  .version('0.1.0')
+  .version('0.2.0')
   .option('--repo <path>', 'Git working tree', process.cwd());
 
 async function reviews() {
@@ -27,9 +27,8 @@ program.command('show')
 
 program.command('comment <message>')
   .option('--commit <ref>', 'Commit to comment on', 'HEAD')
-  .option('--reply-to <id>', 'Parent comment ID')
   .action(async (body, options) => {
-    const comment = await (await reviews()).addComment({ commit: options.commit, body, replyTo: options.replyTo });
+    const comment = await (await reviews()).addComment({ commit: options.commit, body });
     console.log(`Saved locally: ${comment.id}`);
   });
 

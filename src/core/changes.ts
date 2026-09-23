@@ -20,3 +20,7 @@ export function commentBody(comment: Comment): string {
 export function reviewTitle(review: Review): string {
   return [...(review.changes ?? [])].reverse().find(change => change.kind === 'rename')?.title ?? review.title;
 }
+
+export function plainNoteBody(comment: Comment): string {
+  return [...(comment.changes ?? [])].reverse().find(change => change.kind === 'edit')?.body ?? comment.body;
+}

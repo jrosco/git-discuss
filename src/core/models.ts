@@ -27,9 +27,9 @@ export const commentSchema = z.object({
 
 export const addCommentSchema = z.object({
   commit: z.string().min(1).max(256),
-  body: commentSchema.shape.body,
-  replyTo: z.uuid().nullable().default(null),
-});
+  body: z.string().max(20000).default(''),
+  action: z.enum(['set', 'add', 'edit', 'append', 'delete']).default('set'),
+}).strict();
 
 export type Comment = z.infer<typeof commentSchema>;
 export type AddComment = z.input<typeof addCommentSchema>;
@@ -37,7 +37,13 @@ export interface Conversation {
   commit: string;
   subject: string;
   comments: Comment[];
+  note: string | null;
 }
+
+export const commitNoteInputSchema = z.object({
+  commit: z.string().min(1).max(256),
+  note: z.string().max(20000).nullable(),
+});
 
 const commitId = z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/);
 export const revisionSchema = z.object({
@@ -126,11 +132,15 @@ export interface SyncResult {
   merged: number;
   uploaded: number;
   unchanged: number;
+  noteOverwriteCommits?: string[];
 }
 
 export interface ReceiveResult {
   remote: string;
   updatedRefs: string[];
+  updatedReviewIds?: string[];
+  updatedNoteCommits?: string[];
+  noteOverwriteCommits?: string[];
 }
 
 export const backgroundUpdatesInputSchema = z.object({
@@ -144,6 +154,13 @@ export interface BackgroundUpdateStatus {
   paused: boolean;
   intervalSeconds: number;
   revision: number;
+  latestChangeSummary: {
+    notesUpdated: boolean;
+    reviewsUpdated: number;
+    sampleReviewIds: string[];
+    sampleNoteCommits: string[];
+    noteOverwriteCommits: string[];
+  } | null;
   lastCheckedAt: string | null;
   lastSuccessAt: string | null;
   nextCheckAt: string | null;

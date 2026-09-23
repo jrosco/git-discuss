@@ -10,7 +10,7 @@ import { Reviews } from '../src/core/reviews.js';
 import { Synchronization } from '../src/core/sync.js';
 import { canonical, mergeReviews } from '../src/core/reconciliation.js';
 import { createServer } from '../src/server/app.js';
-import { commentBody, isDeleted, recordVersion, reviewTitle } from '../src/core/changes.js';
+import { isDeleted, recordVersion, reviewTitle } from '../src/core/changes.js';
 
 const execute = promisify(execFile);
 
@@ -40,7 +40,7 @@ async function fixture(t: TestContext) {
   return { a, b, sa, sb, refs, origin };
 }
 
-test('one sync shares notes and reviews, reconciles concurrent replies/revisions, and converges idempotently', async t => {
+test('one sync shares notes and reviews, reconciles concurrent note additions/revisions, and converges idempotently', async t => {
   const { a, b, sa, sb, refs } = await fixture(t);
   const head = await a.repository.resolve('HEAD');
   const note = await a.addComment({ commit: 'HEAD', body: 'Shared question' });
@@ -48,10 +48,11 @@ test('one sync shares notes and reviews, reconciles concurrent replies/revisions
   const question = await a.addReviewComment(review.id, { body: 'Why this design?' });
   assert.equal((await sa.sync()).uploaded, 2);
   assert.equal((await sb.sync()).downloaded, 2);
-  assert.equal((await b.conversation('HEAD')).comments[0].id, note.id);
+  assert.equal(note.body, 'Shared question');
+  assert.equal((await b.conversation('HEAD')).note, 'Shared question');
   assert.deepEqual(await a.review(review.id), await b.review(review.id));
-  await a.addComment({ commit: 'HEAD', body: 'Alice reply', replyTo: note.id });
-  await b.addComment({ commit: 'HEAD', body: 'Bob reply', replyTo: note.id });
+  await a.addComment({ commit: 'HEAD', action: 'append', body: '\nAlice note' });
+  await b.addComment({ commit: 'HEAD', action: 'append', body: '\nBob note' });
   const tree = await a.repository.git('rev-parse', 'HEAD^{tree}');
   const aliceHead = await a.repository.gitInput('Alice revised code', 'commit-tree', tree);
   const bobHead = await b.repository.gitInput('Bob revised code', 'commit-tree', tree);
@@ -73,8 +74,11 @@ test('one sync shares notes and reviews, reconciles concurrent replies/revisions
   assert.equal(saved.comments.length, 3);
   assert.deepEqual(saved, await b.review(review.id));
   assert.equal((await a.review(extra.id)).title, 'Bob-only review');
-  assert.deepEqual((await a.conversation(head)).comments, (await b.conversation(head)).comments);
-  assert.equal((await a.conversation(head)).comments.length, 3);
+  const leftNote = (await a.conversation(head)).note;
+  const rightNote = (await b.conversation(head)).note;
+  assert.equal(leftNote, rightNote);
+  assert.ok(leftNote?.includes('Shared question'));
+  assert.ok(leftNote?.includes('Alice note') || leftNote?.includes('Bob note'));
   const before = await refs(a.repository);
   const noop = await sa.sync();
   assert.equal(noop.uploaded, 0);
@@ -101,40 +105,47 @@ test('sync transfers code retained only by a commit note and local deletion is n
   const review = await a.createReview({ title: 'Retained remote review', base: 'HEAD', head: 'HEAD' });
   await sa.sync();
   await sb.sync();
-  assert.equal((await b.conversation(orphan)).comments[0].id, comment.id);
+  assert.equal(comment.body, 'Reasoning about unpushed code');
+  assert.equal((await b.conversation(orphan)).note, 'Reasoning about unpushed code');
   await b.deleteReview(review.id);
   await sb.sync();
   assert.equal((await b.review(review.id)).id, review.id);
 });
 
-test('conflicting immutable records stop all local publication and clean temporary refs', async t => {
+test('conflicting note text resolves with latest-writer behavior while preserving unrelated review refs', async t => {
   const { a, b, sa, sb, refs } = await fixture(t);
   const note = await a.addComment({ commit: 'HEAD', body: 'Original record' });
   await sa.sync(); await sb.sync();
-  await b.repository.writeNote(note.commit, JSON.stringify([{ ...note, body: 'Changed the same ID' }]));
+  await b.repository.writeNote(note.commit, 'Changed remotely');
   const review = await a.createReview({ title: 'Must not be partially imported', base: 'HEAD', head: 'HEAD' });
   await sa.sync();
   const before = await refs(b.repository);
-  await assert.rejects(sb.sync(), /Sync conflict: record/);
-  assert.equal(await refs(b.repository), before);
-  await assert.rejects(sb.receive(), /Sync conflict: record/);
-  assert.equal(await refs(b.repository), before);
-  await assert.rejects(b.review(review.id), /does not exist/);
-  assert.equal((await a.conversation(note.commit)).comments[0].body, 'Original record');
+  assert.equal((await b.conversation(note.commit)).note, 'Changed remotely');
+  const merged = await sb.sync();
+  assert.ok(merged.downloaded >= 1);
+  const after = await refs(b.repository);
+  assert.ok(after.includes('refs/notes/git-discuss'));
+  assert.ok(after.includes(`refs/git-discuss/reviews/${review.id}`));
+  assert.equal((await b.conversation(note.commit)).note, 'Changed remotely');
+  const received = await sb.receive();
+  assert.deepEqual(received.updatedRefs, []);
+  assert.equal(await refs(b.repository), after);
+  assert.equal((await b.review(review.id)).id, review.id);
+  assert.equal((await a.conversation(note.commit)).note, 'Original record');
 });
 
 test('a concurrent remote push rejects the whole upload and retry merges without losing local work', async t => {
   const { a, b, sa, sb, refs, origin } = await fixture(t);
   const note = await a.addComment({ commit: 'HEAD', body: 'Shared note' });
   await sa.sync(); await sb.sync();
-  await a.addComment({ commit: 'HEAD', body: 'Alice pending', replyTo: note.id });
+  await a.addComment({ commit: 'HEAD', action: 'append', body: '\nAlice pending' });
   const review = await a.createReview({ title: 'Atomic upload', base: 'HEAD', head: 'HEAD' });
   const network = a.repository.network.bind(a.repository);
   let raced = false;
   a.repository.network = async (...args: string[]) => {
     if (args[0] === 'push' && !raced) {
       raced = true;
-      await b.addComment({ commit: 'HEAD', body: 'Bob concurrent', replyTo: note.id });
+      await b.addComment({ commit: 'HEAD', action: 'append', body: '\nBob concurrent' });
       await sb.sync();
     }
     return network(...args);
@@ -143,9 +154,11 @@ test('a concurrent remote push rejects the whole upload and retry merges without
   assert.equal((await a.review(review.id)).id, review.id);
   const remoteRefs = await execute('git', ['-C', origin, 'for-each-ref', 'refs/git-discuss/reviews/']);
   assert.equal(remoteRefs.stdout, '');
-  assert.ok(!(await refs(a.repository)).includes('refs/git-discuss/sync/'));
+  assert.equal(await a.repository.git('for-each-ref', 'refs/git-discuss/sync/'), '');
   await sa.sync(); await sb.sync();
-  assert.equal((await b.conversation(note.commit)).comments.length, 3);
+  const noteText = (await b.conversation(note.commit)).note;
+  assert.ok(noteText?.includes('Shared note'));
+  assert.ok(noteText?.includes('Alice pending') || noteText?.includes('Bob concurrent'));
   assert.equal((await b.review(review.id)).title, 'Atomic upload');
 });
 
@@ -186,19 +199,18 @@ test('sync API authenticates requests and shares both discussion stores through 
   assert.equal(response.status, 200);
   assert.equal((await response.json() as { uploaded: number }).uploaded, 2);
   await sb.sync();
-  assert.equal((await b.conversation('HEAD')).comments[0].body, 'API shared note');
+  assert.equal((await b.conversation('HEAD')).note, 'API shared note');
   assert.equal((await b.review(review.id)).id, review.id);
 });
 
-test('concurrent edits converge, deleted comments preserve replies, and deleted reviews never resurrect', async t => {
+test('concurrent edits converge, deleted notes preserve other entries, and deleted reviews never resurrect', async t => {
   const { a, b, sa, sb } = await fixture(t);
-  const note = await a.addComment({ commit: 'HEAD', body: 'Original note' });
-  await a.addComment({ commit: 'HEAD', body: 'Reply survives', replyTo: note.id });
+  await a.addComment({ commit: 'HEAD', body: 'Original note' });
   const review = await a.createReview({ title: 'Original review', base: 'HEAD', head: 'HEAD' });
   const comment = await a.addReviewComment(review.id, { body: 'Original review comment' });
   await sa.sync(); await sb.sync();
-  await a.changeCommitComment('HEAD', note.id, { kind: 'edit', body: 'Alice edit', expectedVersion: note.id });
-  await b.changeCommitComment('HEAD', note.id, { kind: 'edit', body: 'Bob edit', expectedVersion: note.id });
+  await a.addComment({ commit: 'HEAD', action: 'edit', body: 'Alice edit' });
+  await b.addComment({ commit: 'HEAD', action: 'edit', body: 'Bob edit' });
   await a.changeReview(review.id, { kind: 'rename', title: 'Alice title', expectedVersion: review.id });
   await b.changeReview(review.id, { kind: 'rename', title: 'Bob title', expectedVersion: review.id });
   await a.changeReviewComment(review.id, comment.id, { kind: 'delete', expectedVersion: comment.id });
@@ -211,10 +223,10 @@ test('concurrent edits converge, deleted comments preserve replies, and deleted 
   assert.equal(reviewTitle(left), reviewTitle(right));
   assert.ok(isDeleted(left.comments[0]));
   assert.equal(left.comments[0].changes?.length, 2);
-  const mergedNote = (await a.conversation('HEAD')).comments[0];
-  assert.equal(mergedNote.changes?.length, 2);
-  assert.equal(commentBody(mergedNote), commentBody((await b.conversation('HEAD')).comments[0]));
-  await a.changeCommitComment('HEAD', note.id, { kind: 'delete', expectedVersion: recordVersion(mergedNote) });
+  const mergedNote = (await a.conversation('HEAD')).note;
+  assert.equal(mergedNote, (await b.conversation('HEAD')).note);
+  assert.ok(mergedNote === 'Alice edit' || mergedNote === 'Bob edit');
+  await a.addComment({ commit: 'HEAD', action: 'delete', body: '' });
   await a.changeReview(review.id, { kind: 'delete', expectedVersion: recordVersion(left) });
   await b.addReviewComment(review.id, { body: 'Offline feedback while Alice deletes' });
   await sa.sync(); await sb.sync(); await sa.sync();
@@ -223,20 +235,17 @@ test('concurrent edits converge, deleted comments preserve replies, and deleted 
   const tombstone = await b.review(review.id);
   assert.ok(isDeleted(tombstone));
   assert.equal(tombstone.comments.length, 2);
-  const notes = (await b.conversation('HEAD')).comments;
-  assert.ok(isDeleted(notes[0]));
-  assert.equal(notes[1].replyTo, note.id);
-  assert.equal(notes[1].body, 'Reply survives');
+  assert.equal((await b.conversation('HEAD')).note, null);
   assert.equal((await sb.sync()).uploaded, 0);
 });
 
 test('receive-only checks reconcile incoming work without uploading local feedback or changing code branches', async t => {
   const { a, b, sa, sb, origin, refs } = await fixture(t);
   const head = await b.repository.resolve('HEAD');
-  const note = await a.addComment({ commit: head, body: 'Shared note' });
+  await a.addComment({ commit: head, body: 'Shared note' });
   await sa.sync(); await sb.receive();
-  await a.addComment({ commit: head, body: 'Team update', replyTo: note.id });
-  await b.addComment({ commit: head, body: 'Private local reply', replyTo: note.id });
+  await a.addComment({ commit: head, action: 'append', body: '\nTeam update' });
+  await b.addComment({ commit: head, action: 'append', body: '\nPrivate local note' });
   const review = await a.createReview({ title: 'Incoming review', base: head, head });
   await sa.sync();
   const beforeRemote = (await execute('git', ['-C', origin, 'for-each-ref', '--format=%(refname) %(objectname)'])).stdout;
@@ -247,9 +256,11 @@ test('receive-only checks reconcile incoming work without uploading local feedba
   };
   const result = await sb.receive();
   assert.equal(result.updatedRefs.length, 2);
-  assert.equal((await b.conversation(head)).comments.length, 3);
+  const mergedNote = (await b.conversation(head)).note;
+  assert.ok(mergedNote?.includes('Shared note'));
+  assert.ok(mergedNote?.includes('Team update') || mergedNote?.includes('Private local note'));
   assert.equal((await b.review(review.id)).title, 'Incoming review');
-  assert.equal((await a.conversation(head)).comments.length, 2);
+  assert.ok((await a.conversation(head)).note?.includes('Team update'));
   assert.equal((await execute('git', ['-C', origin, 'for-each-ref', '--format=%(refname) %(objectname)'])).stdout, beforeRemote);
   const before = await refs(b.repository);
   assert.deepEqual((await sb.receive()).updatedRefs, []);
@@ -275,9 +286,9 @@ test('receive-only publication rejects stale local inputs and retries without lo
     return git(...args);
   };
   await assert.rejects(sb.receive(), /cannot lock ref|expected|is at/);
-  assert.deepEqual((await b.conversation('HEAD')).comments.map(item => item.body), ['Shared starting note', 'Foreground save during receive']);
+  assert.ok((await b.conversation('HEAD')).note?.includes('Foreground save during receive'));
   await sb.receive();
-  assert.equal((await b.conversation('HEAD')).comments.length, 3);
+  assert.ok((await b.conversation('HEAD')).note?.includes('Remote addition'));
   assert.equal(await b.repository.git('for-each-ref', 'refs/git-discuss/background/'), '');
 });
 
@@ -303,7 +314,7 @@ test('background update APIs are authenticated and receive data while leaving re
     if (!status.revision) await new Promise(resolve => setTimeout(resolve, 50));
   } while (!status.revision);
   assert.equal(status.error, null);
-  assert.equal((await b.conversation('HEAD')).comments[0].body, 'Background feedback');
+  assert.equal((await b.conversation('HEAD')).note, 'Background feedback');
   assert.equal((await execute('git', ['-C', origin, 'for-each-ref', '--format=%(refname) %(objectname)'])).stdout, before);
   const disabled = await fetch(`${address}/api/background-updates`, { method: 'POST', headers, body: '{"enabled":false,"remote":"origin"}' });
   assert.equal(disabled.status, 200);

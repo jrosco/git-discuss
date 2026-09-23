@@ -10,7 +10,7 @@ import { fileURLToPath } from 'node:url';
 const execute = promisify(execFile);
 const cli = fileURLToPath(new URL('../dist/cli.js', import.meta.url));
 
-test('built CLI serves browser assets and shares persisted comments with the API', { timeout: 60000 }, async t => {
+test('built CLI serves browser assets and shares persisted notes with the API', { timeout: 60000 }, async t => {
   const directory = await mkdtemp(path.join(tmpdir(), 'git-discuss-smoke-'));
   let server;
   t.after(async () => {
@@ -24,6 +24,7 @@ test('built CLI serves browser assets and shares persisted comments with the API
   await git('config', 'user.name', 'Smoke Tester');
   await git('config', 'user.email', 'smoke@example.test');
   await git('-c', 'commit.gpgsign=false', 'commit', '--allow-empty', '-m', 'Smoke revision');
+  const originalHead = (await git('rev-parse', 'HEAD')).stdout.trim();
   await execute(process.execPath, [cli, '--repo', directory, 'comment', 'CLI comment']);
   const run = (...args) => execute(process.execPath, [cli, '--repo', directory, ...args]);
   const review = JSON.parse((await run('review', 'create', 'Smoke review', '--base', 'HEAD')).stdout);
@@ -79,13 +80,14 @@ test('built CLI serves browser assets and shares persisted comments with the API
   assert.equal(page.nextOffset, 1);
   const olderPage = await (await fetch(new URL(`/api/commits?ref=${page.tip}&offset=${page.nextOffset}`, url), { headers })).json();
   assert.equal(olderPage.commits[0].commit, review.revisions[0].head);
-  const discussion = await (await fetch(new URL(`/api/conversation?commit=${review.revisions[0].head}`, url), { headers })).json();
-  assert.equal(discussion.comments[0].body, 'CLI comment');
+  const discussion = await (await fetch(new URL(`/api/conversation?commit=${originalHead}`, url), { headers })).json();
+  assert.equal(discussion.note, 'CLI comment');
+  assert.deepEqual(discussion.comments, []);
   const reply = await fetch(new URL('/api/comments', url), { method: 'POST', headers,
-    body: JSON.stringify({ commit: discussion.commit, body: 'Browser reply', replyTo: discussion.comments[0].id }) });
+    body: JSON.stringify({ commit: discussion.commit, body: 'Browser reply', action: 'append' }) });
   assert.equal(reply.status, 201);
   const shown = await run('show', '--commit', discussion.commit);
-  assert.equal(JSON.parse(shown.stdout).comments[1].body, 'Browser reply');
+  assert.ok(JSON.parse(shown.stdout).note.includes('Browser reply'));
   const apiReview = await (await fetch(new URL(`/api/reviews/${review.id}`, url), { headers })).json();
   assert.equal(apiReview.comments[0].body, 'CLI review reasoning');
   const reviewReply = await fetch(new URL(`/api/reviews/${review.id}/comments`, url), { method: 'POST', headers,
