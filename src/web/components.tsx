@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { BackgroundUpdateStatus, BranchChoice, Comment, CommentMutation, Review } from '../core/models.js';
 import { commentBody, isDeleted, recordVersion } from '../core/changes.js';
 import { errorMessage } from './api.js';
@@ -56,26 +56,93 @@ export function CodeSource({ id, label, help, value, onChange, branches, savedOp
   id: string; label: string; help: string; value: string; onChange: (value: string) => void; branches: BranchChoice[];
   savedOption?: { value: string; label: string };
 }) {
-  const [manual, setManual] = useState(false);
-  const known = value === 'HEAD' || value === savedOption?.value || branches.some(branch => branch.ref === value);
-  const custom = manual || Boolean(value && !known);
+  type Choice = { value: string; title: string; meta: string; custom?: boolean };
+  const choices: Choice[] = [
+    { value: 'HEAD', title: 'My current saved code', meta: 'Use the currently checked-out commit' },
+    ...(savedOption ? [{ value: savedOption.value, title: savedOption.label, meta: 'Exact code saved with the previous version' }] : []),
+    ...branches.map(branch => ({ value: branch.ref, title: branch.name,
+      meta: `${branch.remote ? 'Team branch' : 'Local branch'} · ${branch.commit.slice(0, 8)}${branch.current ? ' · currently open' : ''}` })),
+  ].filter((item, index, list) => list.findIndex(other => other.value === item.value) === index);
+  if (value && !choices.some(item => item.value === value)) choices.unshift({ value, title: value, meta: 'Entered branch name or commit ID' });
+  const selectedTitle = choices.find(item => item.value === value)?.title ?? '';
+  const [query, setQuery] = useState(selectedTitle);
+  const [open, setOpen] = useState(false);
+  const [active, setActive] = useState(-1);
+  const [visibleLimit, setVisibleLimit] = useState(9);
+  const container = useRef<HTMLDivElement | null>(null);
+  const input = useRef<HTMLInputElement | null>(null);
+  const typed = query.trim();
+  const pending = query !== selectedTitle;
+  const search = pending ? typed.toLowerCase() : '';
+  const filtered = choices.filter(item => !search || `${item.title} ${item.value} ${item.meta}`.toLowerCase().includes(search));
+  const selectedChoice = filtered.find(item => item.value === value);
+  const remaining = filtered.filter(item => item.value !== value);
+  const exactChoice = choices.find(item => item.value === typed) ?? choices.find(item => item.title === typed);
+  const customChoice: Choice | undefined = pending && typed && !exactChoice
+    ? { value: typed, title: typed, meta: 'Use this branch name or commit ID', custom: true } : undefined;
+  const suggestions = [...(selectedChoice ? [selectedChoice] : []), ...remaining.slice(0, visibleLimit), ...(customChoice ? [customChoice] : [])];
+  const suggestionKey = suggestions.map(item => item.value).join('\0');
+
+  useEffect(() => { setQuery(selectedTitle); }, [value, selectedTitle]);
+  useEffect(() => { setActive(-1); setVisibleLimit(9); }, [search]);
+  useEffect(() => { setActive(-1); }, [suggestionKey]);
+  useEffect(() => {
+    input.current?.setCustomValidity(pending ? 'Choose a result, or press Enter to use the branch name or commit ID you typed.' : '');
+  }, [pending]);
+  useEffect(() => {
+    const closeOutside = (event: PointerEvent) => {
+      if (container.current && !container.current.contains(event.target as Node)) { setOpen(false); setActive(-1); }
+    };
+    window.addEventListener('pointerdown', closeOutside);
+    return () => window.removeEventListener('pointerdown', closeOutside);
+  }, []);
+  useEffect(() => { if (open && active >= 0) document.getElementById(`${id}-choice-${active}`)?.scrollIntoView({ block: 'nearest' }); }, [active, open, id]);
+
+  function choose(choice: Choice) {
+    input.current?.setCustomValidity('');
+    input.current?.focus();
+    onChange(choice.value); setQuery(choice.title); setOpen(false); setActive(-1);
+  }
   return <div className="form-field">
     <HelpLabel field={id} label={label} help={help} />
-    <select id={id} value={custom ? '__custom__' : value} required aria-describedby={`${id}-help`}
-      onChange={event => {
-        const next = event.target.value;
-        setManual(next === '__custom__');
-        onChange(next === '__custom__' ? '' : next);
-      }}>
-      <option value="" disabled>Choose a branch…</option>
-      {savedOption && <option value={savedOption.value}>{savedOption.label}</option>}
-      <BranchOptions branches={branches} />
-      <option value="__custom__">Enter a branch name or commit ID…</option>
-    </select>
-    {custom && <div className="custom-source">
-      <label htmlFor={`${id}-custom`}>Branch name or commit ID</label>
-      <input id={`${id}-custom`} value={value} onChange={event => onChange(event.target.value)} placeholder="For example: main, feature/login, or a commit ID" required maxLength={256} />
-    </div>}
+    <div className="ref-picker branch-picker" ref={container} onBlur={event => {
+      if (!event.currentTarget.contains(event.relatedTarget as Node | null)) { setOpen(false); setActive(-1); }
+    }}>
+      <input id={id} ref={input} className="branch-picker-input" role="combobox" value={query} required maxLength={256}
+        placeholder="Search branches or enter a commit ID" autoComplete="off"
+        aria-describedby={`${id}-help ${id}-entry-hint`} aria-expanded={open} aria-controls={`${id}-suggestions`}
+        aria-autocomplete="list" aria-activedescendant={open && suggestions[active] ? `${id}-choice-${active}` : undefined}
+        onChange={event => { setQuery(event.target.value); setOpen(true); setActive(-1); }}
+        onFocus={() => { setOpen(true); setActive(-1); }} onClick={() => setOpen(true)}
+        onKeyDown={event => {
+          if (event.key === 'Escape') { event.preventDefault(); setOpen(false); setActive(-1); setQuery(selectedTitle); return; }
+          if (event.key === 'Enter') {
+            event.preventDefault();
+            const choice = open && suggestions[active] ? suggestions[active] : exactChoice ?? customChoice;
+            if (choice) choose(choice);
+            return;
+          }
+          if (suggestions.length && (event.key === 'ArrowDown' || event.key === 'ArrowUp')) {
+            event.preventDefault(); setOpen(true);
+            setActive(index => event.key === 'ArrowDown' ? (index + 1) % suggestions.length : index > 0 ? index - 1 : suggestions.length - 1);
+          }
+        }} />
+      {open && <ul id={`${id}-suggestions`} className="ref-suggestions" role="listbox" aria-label={`Choose ${label.toLowerCase()}`}>
+        <li className="ref-suggestions-current"><strong>Current selection:</strong> {selectedTitle || 'None yet'}</li>
+        {suggestions.map((item, index) => <li id={`${id}-choice-${index}`} key={item.value} role="option" aria-selected={active === index}>
+          <button type="button" className={`ref-suggestion-card${item.value === value || active === index ? ' active' : ''}`}
+            onMouseDown={event => event.preventDefault()} onClick={() => choose(item)}>
+            <span className="change-title"><span>{item.custom ? <>Use <code>{item.title}</code></> : item.title}</span>
+              {item.value === value && <span className="version-badge">Current</span>}</span>
+            <span className="review-card-meta">{item.meta}</span>
+          </button>
+        </li>)}
+        {filtered.length === 0 && <li className="ref-suggestions-empty">No matching saved branches. You can use the value you typed.</li>}
+        {remaining.length > visibleLimit && <li className="ref-suggestions-footer"><button type="button" className="text-button"
+          onMouseDown={event => event.preventDefault()} onClick={() => setVisibleLimit(current => current + 9)}>Show older results</button></li>}
+      </ul>}
+    </div>
+    <small id={`${id}-entry-hint`} className="field-hint">{pending ? 'Choose a result, or press Enter to use your entry.' : 'Choose a branch, or type a commit ID and press Enter.'}</small>
   </div>;
 }
 

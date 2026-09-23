@@ -148,7 +148,8 @@ details p { font-size: 13px; }
   align-items: center;
   padding-right: 28px;
 }
-.branch-picker::after {
+.commit-picker-field { position: relative; flex: 1; min-width: 0; }
+.branch-picker::after, .commit-picker-field::after {
   content: '▾';
   position: absolute;
   right: 10px;

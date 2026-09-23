@@ -18,6 +18,7 @@ function ChangePicker({ initialCommit, conversation, syncVersion, backgroundRevi
   const [branchVisibleLimit, setBranchVisibleLimit] = useState(9);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [activeSuggestion, setActiveSuggestion] = useState(-1);
+  const [commitVisibleLimit, setCommitVisibleLimit] = useState(9);
   const branchPickerRef = useRef<HTMLDivElement | null>(null);
   const pickerRef = useRef<HTMLFormElement | null>(null);
   const [history, setHistory] = useState<CommitPage | null>(null);
@@ -79,14 +80,16 @@ function ChangePicker({ initialCommit, conversation, syncVersion, backgroundRevi
   const disabled = busy;
   const loading = busy || browsing;
   const visibleCommits = history?.commits.filter(item => !notesOnly || item.noteCount === 1) ?? [];
-  const query = customRef.trim().toLowerCase();
+  const currentCommitLabel = conversation ? `${conversation.subject || 'Untitled change'} · ${conversation.commit.slice(0, 8)}` : initialCommit;
+  const commitSearchRaw = customRef.trim().toLowerCase();
+  const query = commitSearchRaw === currentCommitLabel.toLowerCase() ? '' : commitSearchRaw;
+  const commitToOpen = commitSearchRaw === currentCommitLabel.toLowerCase() ? currentCommit ?? initialCommit : customRef.trim();
   const commitSuggestions = (query ? visibleCommits
     .filter(item =>
       item.commit.toLowerCase().includes(query) ||
       item.subject.toLowerCase().includes(query) ||
       item.author.toLowerCase().includes(query))
     : visibleCommits)
-    .slice(0, query ? 20 : visibleCommits.length)
     .map(item => ({
       kind: 'commit' as const,
       value: item.commit,
@@ -96,7 +99,6 @@ function ChangePicker({ initialCommit, conversation, syncVersion, backgroundRevi
     }));
   const commitBranchSuggestions = query ? branches
     .filter(item => item.ref.toLowerCase().includes(query) || item.name.toLowerCase().includes(query))
-    .slice(0, 6)
     .map(item => ({
       kind: 'branch' as const,
       value: item.ref,
@@ -104,9 +106,12 @@ function ChangePicker({ initialCommit, conversation, syncVersion, backgroundRevi
       meta: `${item.remote ? 'Team branch' : 'Local branch'} · ${item.commit.slice(0, 8)}`,
       hasNote: false,
     })) : [];
-  const suggestions = [...commitSuggestions, ...commitBranchSuggestions]
-    .filter((item, index, list) => list.findIndex(other => other.value === item.value) === index)
-    .slice(0, query ? 10 : undefined);
+  const matchingSuggestions = [...commitSuggestions, ...commitBranchSuggestions]
+    .filter((item, index, list) => list.findIndex(other => other.value === item.value) === index);
+  const currentSuggestion = matchingSuggestions.find(item => item.value === currentCommit);
+  const remainingSuggestions = matchingSuggestions.filter(item => item.value !== currentCommit);
+  const suggestions = [...(currentSuggestion ? [currentSuggestion] : []), ...remainingSuggestions.slice(0, commitVisibleLimit)];
+  const hasMoreSuggestions = remainingSuggestions.length > commitVisibleLimit;
   const showSuggestions = pickerOpen;
   const noSuggestions = showSuggestions && suggestions.length === 0;
   const branchChoices: { ref: string; title: string; meta: string }[] = [
@@ -140,16 +145,19 @@ function ChangePicker({ initialCommit, conversation, syncVersion, backgroundRevi
     setBranchQuery(selectedBranch.title);
   }, [selectedBranch.title]);
 
+  useEffect(() => { setCustomRef(currentCommitLabel); }, [currentCommitLabel]);
+  useEffect(() => { setCommitVisibleLimit(9); setActiveSuggestion(-1); }, [query, notesOnly, history?.tip]);
+
   useEffect(() => {
     setBranchVisibleLimit(9);
     setActiveBranchSuggestion(-1);
   }, [branchSearch]);
 
   async function pickSuggestion(value: string) {
-    setCustomRef(value);
     setPickerOpen(false);
     setActiveSuggestion(-1);
-    await onLoad(value);
+    setCustomRef(currentCommitLabel);
+    await onLoad(value); // A changed selection updates the readable label through the effect above.
   }
 
   async function pickBranch(ref: string) {
@@ -171,6 +179,7 @@ function ChangePicker({ initialCommit, conversation, syncVersion, backgroundRevi
           setBranchVisibleLimit(9);
         }}
         onFocus={() => { setBranchPickerOpen(true); setActiveBranchSuggestion(-1); }}
+        onClick={() => setBranchPickerOpen(true)}
         onKeyDown={event => {
           if (event.key === 'Escape') { setBranchPickerOpen(false); setActiveBranchSuggestion(-1); return; }
           if (!branchSuggestions.length) return;
@@ -209,15 +218,16 @@ function ChangePicker({ initialCommit, conversation, syncVersion, backgroundRevi
       </ul>}
     </div><button type="button" className="secondary-button" disabled={loading} onClick={() => void browse(branch)}>Refresh list</button></div>
     <p className="field-hint">Branches are named lines of work. Team branches show the code last downloaded to this computer.</p>
-    <form className="ref-picker" ref={pickerRef} onSubmit={event => { event.preventDefault(); void onLoad(customRef); }}>
+    <form className="ref-picker" ref={pickerRef} onSubmit={event => { event.preventDefault(); void pickSuggestion(commitToOpen); }}>
       <label htmlFor="custom-commit">Commit ID or branch name</label>
-      <div className="row"><input id="custom-commit" disabled={disabled} value={customRef}
+      <div className="row"><div className="commit-picker-field"><input id="custom-commit" className="branch-picker-input" disabled={disabled} value={customRef}
         onChange={event => {
           setCustomRef(event.target.value);
           setPickerOpen(true);
           setActiveSuggestion(-1);
         }}
         onFocus={() => { setPickerOpen(true); setActiveSuggestion(-1); }}
+        onClick={() => setPickerOpen(true)}
         onKeyDown={event => {
           if (event.key === 'Escape') { setPickerOpen(false); setActiveSuggestion(-1); return; }
           if (!suggestions.length) return;
@@ -242,12 +252,14 @@ function ChangePicker({ initialCommit, conversation, syncVersion, backgroundRevi
         aria-activedescendant={showSuggestions && suggestions[activeSuggestion] ? `commit-choice-${activeSuggestion}` : undefined}
         aria-expanded={showSuggestions}
         aria-controls="commit-ref-suggestions"
-        aria-autocomplete="list" />
-        <button disabled={disabled || !customRef.trim()}>Open notes</button></div>
+        aria-autocomplete="list" /></div>
+        <button disabled={disabled || !commitToOpen}>Open notes</button></div>
       {showSuggestions && <ul id="commit-ref-suggestions" className="ref-suggestions" role="listbox" aria-label="Matching commits and branches">
+        <li className="ref-suggestions-current"><strong>Current selection:</strong> {currentCommitLabel}</li>
         {suggestions.map((item, index) => <li id={`commit-choice-${index}`} key={`${item.kind}-${item.value}`} role="option" aria-selected={activeSuggestion === index}>
-          <button type="button" className={`ref-suggestion-card${activeSuggestion === index ? ' active' : ''}`} onMouseDown={event => event.preventDefault()} onClick={() => void pickSuggestion(item.value)}>
+          <button type="button" className={`ref-suggestion-card${item.value === currentCommit || activeSuggestion === index ? ' active' : ''}`} disabled={busy} onMouseDown={event => event.preventDefault()} onClick={() => void pickSuggestion(item.value)}>
             <span className="change-title"><span>{item.title}</span><span className="change-badges">
+              {item.value === currentCommit && <span className="version-badge">Current</span>}
               {item.kind === 'commit' && item.hasNote && <span className="note-count has-notes" title="Note saved on this commit">
                 <svg aria-hidden="true" viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.3"><path d="M3 2.5h10a1 1 0 0 1 1 1v7a1 1 0 0 1-1 1H7l-4 3v-3H3a1 1 0 0 1-1-1v-7a1 1 0 0 1 1-1Z" /></svg>
                 <span className="sr-only">Note saved on this commit</span>
@@ -258,7 +270,10 @@ function ChangePicker({ initialCommit, conversation, syncVersion, backgroundRevi
           </button>
         </li>)}
         {noSuggestions && <li className="ref-suggestions-empty" aria-live="polite">No matching commits or branches.</li>}
-        {history && history.nextOffset !== null && <li className="ref-suggestions-footer"><button type="button" className="text-button" disabled={browsing} onMouseDown={event => event.preventDefault()} onClick={() => { setPickerOpen(true); void loadOlder(); }}>{browsing ? 'Loading…' : 'Show older commits'}</button></li>}
+        {(hasMoreSuggestions || history?.nextOffset != null) && <li className="ref-suggestions-footer"><button type="button" className="text-button" disabled={loading} onMouseDown={event => event.preventDefault()} onClick={() => {
+          setPickerOpen(true); setCommitVisibleLimit(current => current + 9);
+          if (!hasMoreSuggestions) void loadOlder();
+        }}>{browsing ? 'Loading…' : 'Show older results'}</button></li>}
       </ul>}
     </form>
     <label className="checkbox-label notes-only-toggle"><input type="checkbox" checked={notesOnly} onChange={event => setNotesOnly(event.target.checked)} disabled={loading} />
@@ -266,7 +281,7 @@ function ChangePicker({ initialCommit, conversation, syncVersion, backgroundRevi
     <ErrorNotice message={error} onRetry={() => void browse(branch)} />
     {countError && <p className="field-hint" role="status">Note counts could not be refreshed. Choose Refresh list to try again.</p>}
     {browsing && <p role="status" className="muted">Finding saved changes…</p>}
-    {notesOnly && !visibleCommits.length && !browsing && <p className="field-hint" role="status">No notes among the loaded commits.{history?.nextOffset != null ? ' Open the search box and choose Show older commits to look further back.' : ''}</p>}
+    {notesOnly && !visibleCommits.length && !browsing && <p className="field-hint" role="status">No notes among the loaded commits.{history?.nextOffset != null ? ' Open the search box and choose Show older results to look further back.' : ''}</p>}
   </section>;
 }
 
