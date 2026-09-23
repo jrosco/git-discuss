@@ -10,6 +10,15 @@ import type { BackgroundUpdateStatus, SyncResult } from '../core/models.js';
 import type { ComposerSharing } from './submission.js';
 
 type Theme = 'light' | 'dark';
+type Workspace = 'reviews' | 'notes';
+const workspaceStorageKey = 'git-discuss-workspace';
+function initialWorkspace(): Workspace {
+  try {
+    const saved = sessionStorage.getItem(workspaceStorageKey);
+    if (saved === 'reviews' || saved === 'notes') return saved;
+  } catch { /* Navigation still works if browser storage is unavailable. */ }
+  return 'reviews';
+}
 type RepositoryInfo = { root: string; initialCommit: string; currentBranch: string | null };
 const themeStorageKey = 'git-discuss-theme';
 function initialTheme(): Theme {
@@ -24,7 +33,10 @@ document.documentElement.dataset.theme = startingTheme;
 
 function App() {
   const [theme, setTheme] = useState<Theme>(startingTheme);
-  const [workspace, setWorkspace] = useState<'reviews' | 'notes'>('reviews');
+  const [workspace, setWorkspace] = useState<Workspace>(initialWorkspace);
+  useEffect(() => {
+    try { sessionStorage.setItem(workspaceStorageKey, workspace); } catch { /* Keep navigation usable without storage. */ }
+  }, [workspace]);
   const [repository, setRepository] = useState<RepositoryInfo | null>(null);
   const [error, setError] = useState('');
   const [syncing, setSyncing] = useState(false);

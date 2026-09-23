@@ -117,7 +117,7 @@ Open reviews have separate **Discussion** and **Code changes** views. The versio
 
 Use **Add updated code** → **Save new version** after changing the code. Previous feedback and code versions remain available. The starting code defaults to the previous version's saved base. Adding versions, refreshing feedback, and sharing preserve the version being discussed and any draft. Use **View latest version** to switch explicitly; changing versions or reviews asks before discarding unsaved feedback. Returning to the review list keeps the current review draft and marks its card.
 
-Project navigation separates **Reviews** from **Change notes** (the previous **Commit notes** screen). **Which should I use?** explains when each is useful. Switching workspaces preserves drafts and selections within the open page; these drafts do not survive a page reload. Replies can cross review versions; the feedback form explicitly names the version that a new comment or reply will reference.
+Project navigation separates **Reviews** from **Change notes** (the previous **Commit notes** screen). **Which should I use?** explains when each is useful. The selected workspace is remembered in browser-tab session storage, so a page refresh keeps the same workspace open. Switching workspaces preserves drafts and selections within the open page; these drafts do not survive a page reload. Replies can cross review versions; the feedback form explicitly names the version that a new comment or reply will reference.
 
 ### Revision diff viewer
 
