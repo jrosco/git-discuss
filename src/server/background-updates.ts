@@ -1,4 +1,4 @@
-import { backgroundUpdatesInputSchema, type BackgroundUpdateStatus } from '../core/models.js';
+import { backgroundUpdatesInputSchema, type BackgroundUpdateStatus, type ReceiveResult } from '../core/models.js';
 import { Synchronization } from '../core/sync.js';
 
 /** One receive-only worker per server; no timer overlap and no credentials prompts. */
@@ -13,10 +13,39 @@ export class BackgroundUpdates {
 
   constructor(private readonly synchronization: Synchronization, private readonly intervalMs = 60000) {
     this.state = { enabled: false, remote: null, running: false, paused: false, intervalSeconds: intervalMs / 1000,
-      revision: 0, lastCheckedAt: null, lastSuccessAt: null, nextCheckAt: null, error: null };
+      revision: 0, latestChangeSummary: null, lastCheckedAt: null, lastSuccessAt: null, nextCheckAt: null, error: null };
+  }
+
+  private summarize(remote: string, updatedRefs: string[], updatedReviewIds: string[] = [],
+    updatedNoteCommits?: string[]) {
+    const notesRef = 'refs/notes/git-discuss';
+    return {
+      remote,
+      notesUpdated: updatedNoteCommits === undefined ? updatedRefs.includes(notesRef) : updatedNoteCommits.length > 0,
+      reviewsUpdated: updatedReviewIds.length,
+      sampleReviewIds: updatedReviewIds.slice(0, 5),
+      sampleNoteCommits: updatedNoteCommits?.slice(0, 5) ?? [],
+    };
   }
 
   status(): BackgroundUpdateStatus { return { ...this.state, paused: this.foreground > 0 }; }
+
+  private recordUpdates(result: ReceiveResult) {
+    const hasDetails = result.updatedReviewIds !== undefined && result.updatedNoteCommits !== undefined;
+    if (result.updatedRefs.length && (!hasDetails || result.updatedReviewIds!.length + result.updatedNoteCommits!.length > 0)) {
+      this.state.latestChangeSummary = this.summarize(result.remote, result.updatedRefs,
+        result.updatedReviewIds ?? result.updatedRefs.filter(ref => ref.startsWith('refs/git-discuss/reviews/')).map(ref => ref.slice('refs/git-discuss/reviews/'.length)), result.updatedNoteCommits);
+      this.state.revision++;
+    }
+  }
+
+  async receiveNow(input: { remote?: string }): Promise<ReceiveResult> {
+    return this.withForeground(async () => {
+      const result = await this.synchronization.receive(input);
+      this.recordUpdates(result);
+      return result;
+    });
+  }
 
   private clearTimer() {
     if (this.timer) clearTimeout(this.timer);
@@ -62,7 +91,7 @@ export class BackgroundUpdates {
     this.active = (async () => {
       try {
         const result = await this.synchronization.receive({ remote }, controller.signal);
-        if (result.updatedRefs.length) this.state.revision++;
+        this.recordUpdates(result);
         this.state.lastSuccessAt = new Date().toISOString(); this.state.error = null; this.failures = 0;
       } catch (error) {
         if (!controller.signal.aborted) {

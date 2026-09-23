@@ -78,15 +78,25 @@ export function mergeRecords<T extends { id: string; createdAt: string }>(left: 
 }
 
 export function mergeReviews(left: Review, right: Review): Review {
-  const { revisions: leftRevisions, comments: leftComments, changes: leftChanges, schema: leftSchema, ...leftMetadata } = left;
-  const { revisions: rightRevisions, comments: rightComments, changes: rightChanges, schema: rightSchema, ...rightMetadata } = right;
+  const { revisions: leftRevisions, comments: leftComments, changes: leftChanges, schema: leftSchema, tracking: leftTracking, ...leftMetadata } = left;
+  const { revisions: rightRevisions, comments: rightComments, changes: rightChanges, schema: rightSchema, tracking: rightTracking, ...rightMetadata } = right;
   if (canonical(leftMetadata) !== canonical(rightMetadata)) {
     throw new Error(`Sync conflict: review ${left.id} has different identity or title metadata.`);
   }
   const changes = mergeRecords(leftChanges ?? [], rightChanges ?? []);
+  if (leftTracking && rightTracking && canonical(leftTracking) !== canonical(rightTracking)) {
+    throw new Error(`Sync conflict: review ${left.id} follows different branches or starting code.`);
+  }
+  const tracking = leftTracking ?? rightTracking;
+  // Tracked code snapshots are a set, not an observation-order log. Two clones can
+  // observe commits in different orders after a force push, without creating a cycle.
+  const revisions = tracking
+    ? mergeRecords([...leftRevisions].sort((a, b) => compare(a.id, b.id)), [...rightRevisions].sort((a, b) => compare(a.id, b.id)))
+      .sort((a, b) => compare(a.createdAt, b.createdAt) || compare(a.id, b.id))
+    : mergeRecords(leftRevisions, rightRevisions);
   return reviewSchema.parse({ ...leftMetadata, schema: Math.max(leftSchema, rightSchema),
     ...(changes.length ? { changes } : {}),
-    revisions: mergeRecords(leftRevisions, rightRevisions), comments: mergeComments(leftComments, rightComments) });
+    ...(tracking ? { tracking } : {}), revisions, comments: mergeComments(leftComments, rightComments) });
 }
 
 export function mergeComments<T extends Comment>(left: T[], right: T[]): T[] {

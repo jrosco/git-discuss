@@ -1,14 +1,54 @@
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { NOTES_REF, Repository } from '../git/repository.js';
-import { syncInputSchema, type Comment, type Review, type SyncResult, type ReceiveResult } from './models.js';
-import { canonical, mergeComments, mergeReviews, parseComments, parseReview } from './reconciliation.js';
+import { syncInputSchema, type Review, type SyncResult, type ReceiveResult } from './models.js';
+import { canonical, mergeReviews, parseReview } from './reconciliation.js';
+import { BranchTracking } from './tracking.js';
 
 const REVIEWS = 'refs/git-discuss/reviews/';
 type RefMap = Map<string, string>;
 
 export class Synchronization {
   constructor(readonly repository: Repository) {}
+
+  private async mergeNotes(left: Map<string, string>, right: Map<string, string>, local?: string, remote?: string, signal?: AbortSignal) {
+    if (!local) return right;
+    if (!remote) return left;
+    if (await this.repository.isAncestor(local, remote)) return right;
+    if (await this.repository.isAncestor(remote, local)) return left;
+    const commits = [...new Set([...left.keys(), ...right.keys()])];
+    const bases: Map<string, string>[] = [];
+    for (const oid of await this.repository.mergeBases(local, remote)) {
+      signal?.throwIfAborted();
+      // Retention parents also link code into notes history. Code ancestors are not notes bases.
+      let codeAncestor = false;
+      for (const commit of commits) {
+        if (await this.repository.isAncestor(oid, commit)) { codeAncestor = true; break; }
+      }
+      if (codeAncestor) continue;
+      bases.push(await this.readNotes(oid, signal));
+    }
+    const merged = new Map<string, string>();
+    for (const commit of commits) {
+      signal?.throwIfAborted();
+      const a = left.get(commit); const b = right.get(commit);
+      let note: string | undefined;
+      if (a === b) note = a;
+      else {
+        const baseValues = bases.length ? bases.map(base => base.get(commit)) : [undefined];
+        const base = baseValues[0];
+        if (baseValues.some(value => value !== base)) throw new Error(`Note conflict on ${commit}: ambiguous common history. Local text was not overwritten.`);
+        if (a === base) note = b;
+        else if (b === base) note = a;
+        else if (base !== undefined && a !== undefined && b !== undefined && a.startsWith(base) && b.startsWith(base)) {
+          // Independent appends preserve both suffixes in a deterministic order.
+          note = base + [a.slice(base.length), b.slice(base.length)].sort().join('');
+        } else throw new Error(`Note conflict on ${commit}: both copies changed this note. Resolve the two versions before sharing; local text was not overwritten.`);
+      }
+      if (note !== undefined) merged.set(commit, note);
+    }
+    return merged;
+  }
 
   private async refs(...prefixes: string[]): Promise<RefMap> {
     const output = await this.repository.git('for-each-ref', '--format=%(refname) %(objectname) %(symref)', ...prefixes);
@@ -23,8 +63,8 @@ export class Synchronization {
     if (ref !== NOTES_REF) z.uuid().parse(ref.slice(REVIEWS.length));
   }
 
-  private async readNotes(oid?: string, signal?: AbortSignal): Promise<Map<string, Comment[]>> {
-    const notes = new Map<string, Comment[]>();
+  private async readNotes(oid?: string, signal?: AbortSignal): Promise<Map<string, string>> {
+    const notes = new Map<string, string>();
     if (!oid) return notes;
     const tree = await this.repository.git('ls-tree', '-r', '--full-tree', oid);
     for (const line of tree ? tree.split('\n') : []) {
@@ -34,7 +74,7 @@ export class Synchronization {
       if (!match || !commit || !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(commit) || notes.has(commit)) {
         throw new Error('Unsupported Git Discuss notes tree. Sync stopped without dropping any files.');
       }
-      notes.set(commit, parseComments(await this.repository.git('cat-file', 'blob', match[1]), commit));
+      notes.set(commit, await this.repository.gitRaw('cat-file', 'blob', match[1]));
     }
     return notes;
   }
@@ -60,12 +100,12 @@ export class Synchronization {
     if (ref === NOTES_REF) {
       const left = await this.readNotes(local, signal);
       const right = await this.readNotes(remote, signal);
-      for (const commit of new Set([...left.keys(), ...right.keys()])) {
-        files.set(commit, canonical(mergeComments(left.get(commit) ?? [], right.get(commit) ?? [])));
+      for (const [commit, note] of await this.mergeNotes(left, right, local, remote, signal)) {
+        files.set(commit, note);
         retained.add(commit);
       }
-      const same = (notes: Map<string, Comment[]>) => notes.size === files.size &&
-        [...notes].every(([commit, comments]) => files.get(commit) === canonical(comments));
+      const same = (notes: Map<string, string>) => notes.size === files.size &&
+        [...notes].every(([commit, note]) => files.get(commit) === note);
       sameLocal = same(left); sameRemote = same(right);
     } else {
       const id = ref.slice(REVIEWS.length);
@@ -105,6 +145,35 @@ export class Synchronization {
     return this.snapshot(files, parents, signal);
   }
 
+  private async trackBranches(candidates: RefMap, remote: string, staging: string, signal?: AbortSignal) {
+    const reviews = new Map<string, Review>();
+    for (const [ref, oid] of candidates) {
+      if (!ref.startsWith(REVIEWS)) continue;
+      signal?.throwIfAborted();
+      const review = parseReview(await this.repository.readReviewSnapshot(oid), ref.slice(REVIEWS.length));
+      if (review.tracking) reviews.set(ref, review);
+    }
+    const prepared = await new BranchTracking(this.repository).prepare([...reviews.values()], remote, staging, signal);
+    const publicChanges: RefMap = new Map();
+    const privateChanges: RefMap = new Map();
+    const privateInputs = new Map<string, string | undefined>();
+    const updatedIds = new Set<string>();
+    for (const item of prepared) {
+      signal?.throwIfAborted();
+      const ref = `${REVIEWS}${item.review.id}`;
+      const original = reviews.get(ref)!;
+      if (canonical(original) !== canonical(item.review)) {
+        const known = new Set(original.revisions.map(revision => revision.id));
+        const retained = item.review.revisions.filter(revision => !known.has(revision.id)).flatMap(revision => [revision.base, revision.head]);
+        publicChanges.set(ref, await this.snapshot(new Map([['review.json', canonical(item.review)]]), [candidates.get(ref)!, ...retained], signal));
+        updatedIds.add(item.review.id);
+      }
+      privateInputs.set(item.stateRef, item.previous);
+      if (item.stateChanged) { privateChanges.set(item.stateRef, item.stateOid); updatedIds.add(item.review.id); }
+    }
+    return { publicChanges, privateChanges, privateInputs, updatedIds, checkedReviews: [...reviews.keys()] };
+  }
+
   async receive(input: { remote?: string } = {}, signal?: AbortSignal): Promise<ReceiveResult> {
     const { remote } = syncInputSchema.parse(input);
     signal?.throwIfAborted();
@@ -119,8 +188,7 @@ export class Synchronization {
       const specs: string[] = [];
       if (names.includes(NOTES_REF)) specs.push(`${NOTES_REF}:${staging}notes`);
       if (names.some(ref => ref.startsWith(REVIEWS))) specs.push(`${REVIEWS}*:${staging}reviews/*`);
-      if (!specs.length) return { remote, updatedRefs: [] };
-      await this.repository.networkWithSignal(signal, 'fetch', '--atomic', '--no-tags', '--no-write-fetch-head', '--refmap=', remote, ...specs);
+      if (specs.length) await this.repository.networkWithSignal(signal, 'fetch', '--atomic', '--no-tags', '--no-write-fetch-head', '--refmap=', remote, ...specs);
       signal?.throwIfAborted();
       const fetched = await this.refs(staging);
       const local = await this.refs(NOTES_REF, REVIEWS);
@@ -139,18 +207,43 @@ export class Synchronization {
         const next = await this.reconcile(ref, left, right, signal);
         if (next !== left) targets.set(ref, next);
       }
+      const candidates = new Map([...local].filter(([ref]) => ref.startsWith(REVIEWS)));
+      for (const [ref, oid] of targets) candidates.set(ref, oid);
+      const tracked = await this.trackBranches(candidates, remote, staging, signal);
+      for (const ref of tracked.checkedReviews) checked.set(ref, local.get(ref));
+      for (const [ref, oid] of tracked.publicChanges) targets.set(ref, oid);
+      for (const [ref, previous] of tracked.privateInputs) checked.set(ref, previous);
       signal?.throwIfAborted();
-      if (!targets.size) return { remote, updatedRefs: [] };
+      if (!targets.size && !tracked.privateChanges.size) return { remote, updatedRefs: [], updatedReviewIds: [], updatedNoteCommits: [] };
+      const updatedReviewIds = new Set(tracked.updatedIds);
+      for (const [ref, next] of targets) {
+        if (!ref.startsWith(REVIEWS)) continue;
+        signal?.throwIfAborted();
+        const previous = checked.get(ref);
+        const id = ref.slice(REVIEWS.length);
+        if (!previous || canonical(parseReview(await this.repository.readReviewSnapshot(previous), id)) !==
+             canonical(parseReview(await this.repository.readReviewSnapshot(next), id))) updatedReviewIds.add(id);
+      }
+      const updatedNoteCommits: string[] = [];
+      if (targets.has(NOTES_REF)) {
+        const previous = checked.get(NOTES_REF);
+        const next = targets.get(NOTES_REF)!;
+        const left = await this.readNotes(previous, signal);
+        const right = await this.readNotes(next, signal);
+        for (const commit of new Set([...left.keys(), ...right.keys()])) {
+          if (left.get(commit) !== right.get(commit)) updatedNoteCommits.push(commit);
+        }
+      }
       await this.repository.withWriteLock(async () => {
         signal?.throwIfAborted();
         const commands = [...checked].map(([ref, previous]) => {
-          const next = targets.get(ref);
-          return next ? `update ${ref} ${next} ${previous ?? '0'.repeat(next.length)}` : `verify ${ref} ${previous}`;
+          const next = targets.get(ref) ?? tracked.privateChanges.get(ref);
+          return next ? `update ${ref} ${next} ${previous ?? '0'.repeat(next.length)}` : `verify ${ref} ${previous ?? '0'.repeat([...targets.values(), ...tracked.privateChanges.values()][0].length)}`;
         });
         // If any local input changed while preparing, the whole transaction fails. The next check retries.
         await this.repository.gitInput(`start\noption no-deref\n${commands.join('\n')}\nprepare\ncommit\n`, 'update-ref', '--stdin');
       });
-      return { remote, updatedRefs: [...targets.keys()] };
+      return { remote, updatedRefs: [...targets.keys(), ...tracked.privateChanges.keys()], updatedReviewIds: [...updatedReviewIds], updatedNoteCommits };
     } finally {
       const staged = await this.refs(staging);
       if (staged.size) await this.repository.gitInput(
@@ -200,15 +293,23 @@ export class Synchronization {
           targets.set(ref, oid);
           if (right && right !== left) result.downloaded++;
           if (left && right && oid !== left && oid !== right) result.merged++;
-          if (oid !== right) result.uploaded++;
-          if (oid === left && oid === right) result.unchanged++;
         }
-        if (!targets.size) return result;
+        const tracked = await this.trackBranches(targets, remote, staging);
+        for (const [ref, oid] of tracked.publicChanges) targets.set(ref, oid);
+        for (const [ref, oid] of targets) {
+          if (oid !== remoteRefs.get(ref)) result.uploaded++;
+          if (oid === local.get(ref) && oid === remoteRefs.get(ref)) result.unchanged++;
+        }
+        if (!targets.size && !tracked.privateChanges.size) return result;
         // Compare-and-swap all local refs in one transaction, including unchanged refs read during sync.
         const commands = [...targets].map(([ref, oid]) => {
           const previous = local.get(ref) ?? '0'.repeat(oid.length);
           return oid === previous ? `verify ${ref} ${previous}` : `update ${ref} ${oid} ${previous}`;
         });
+        for (const [ref, previous] of tracked.privateInputs) {
+          const next = tracked.privateChanges.get(ref);
+          commands.push(next ? `update ${ref} ${next} ${previous ?? '0'.repeat(next.length)}` : `verify ${ref} ${previous}`);
+        }
         await this.repository.gitInput(`start\noption no-deref\n${commands.join('\n')}\nprepare\ncommit\n`, 'update-ref', '--stdin');
         published = true;
         if (result.uploaded) {

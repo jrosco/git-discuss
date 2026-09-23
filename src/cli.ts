@@ -12,7 +12,7 @@ import { reviewTitle } from './core/changes.js';
 const program = new Command()
   .name('git discuss')
   .description('Local-first Git-backed commit discussions')
-  .version('0.1.0')
+  .version('0.2.0')
   .option('--repo <path>', 'Git working tree', process.cwd());
 
 async function reviews() {
@@ -27,36 +27,45 @@ program.command('show')
 
 program.command('comment <message>')
   .option('--commit <ref>', 'Commit to comment on', 'HEAD')
-  .option('--reply-to <id>', 'Parent comment ID')
+  .option('--append', 'Append to an existing commit note instead of creating a new note')
   .action(async (body, options) => {
-    const comment = await (await reviews()).addComment({ commit: options.commit, body, replyTo: options.replyTo });
+    const comment = await (await reviews()).addComment({ commit: options.commit, body, action: options.append ? 'append' : 'add' });
     console.log(`Saved locally: ${comment.id}`);
   });
 
-const review = program.command('review').description('Stable reviews with retained code revisions');
+const review = program.command('review').description('Branch-following reviews with retained commit discussions');
 review.command('list').option('--json', 'Print complete reviews as JSON').action(async options => {
-  const items = await (await reviews()).listReviews();
+  const engine = await reviews();
+  const items = await Promise.all((await engine.listReviews()).map(item => engine.view(item)));
   if (options.json) { console.log(JSON.stringify(items, null, 2)); return; }
   if (!items.length) { console.log('No reviews yet. Create one with: git discuss review create "Title" --base <branch>'); return; }
   const ids = items.map(item => item.id);
   const rows = items.map(item => [
     shortIdentifier(item.id, ids),
-    shortIdentifier(item.revisions[item.revisions.length - 1].id, item.revisions.map(revision => revision.id)),
-    String(item.revisions.length), String(item.comments.length), reviewTitle(item).replace(/[\x00-\x1f\x7f-\x9f]/g, ' '),
+    item.revisions.find(revision => revision.id === item.currentRevisionId)!.head.slice(0, 12),
+    String(new Set(item.revisions.map(revision => revision.head)).size), String(item.comments.length), reviewTitle(item).replace(/[\x00-\x1f\x7f-\x9f]/g, ' '),
   ]);
-  rows.unshift(['REVIEW', 'LATEST REVISION', 'REVISIONS', 'COMMENTS', 'TITLE']);
+  rows.unshift(['REVIEW', 'CURRENT COMMIT', 'COMMITS', 'COMMENTS', 'TITLE']);
   const widths = rows[0].map((_, index) => Math.max(...rows.map(row => row[index].length)));
   console.log(rows.map(row => row.map((cell, index) => index === row.length - 1 ? cell : cell.padEnd(widths[index])).join('  ')).join('\n'));
 });
 review.command('create <title>')
   .requiredOption('--base <ref>', 'Base commit')
   .option('--head <ref>', 'Head commit', 'HEAD')
+  .option('--pinned', 'Keep a fixed comparison instead of following the head branch')
   .action(async (title, options) => {
-    console.log(JSON.stringify(await (await reviews()).createReview({ title, ...options }), null, 2));
+    const engine = await reviews();
+    console.log(JSON.stringify(await engine.view(await engine.createReview({ title, base: options.base, head: options.head, followBranch: !options.pinned })), null, 2));
   });
 review.command('show <id>').action(async id => {
-  console.log(JSON.stringify(await (await reviews()).review(id), null, 2));
+  const engine = await reviews();
+  console.log(JSON.stringify(await engine.view(await engine.review(id)), null, 2));
 });
+review.command('follow <id>').requiredOption('--head <branch>', 'Branch to follow for an existing pinned review')
+  .action(async (id, options) => {
+    const engine = await reviews();
+    console.log(JSON.stringify(await engine.view(await engine.followBranch(id, { head: options.head })), null, 2));
+  });
 review.command('revise <id>')
   .requiredOption('--base <ref>', 'Base commit')
   .option('--head <ref>', 'Head commit', 'HEAD')
@@ -64,14 +73,15 @@ review.command('revise <id>')
     console.log(JSON.stringify(await (await reviews()).addRevision(id, options), null, 2));
   });
 review.command('comment <id> <message>')
-  .option('--revision <id>', 'Revision ID or prefix (defaults to latest)', (value: string, previous: string | undefined) => {
+  .option('--commit <ref>', 'Saved commit to discuss (defaults to the review’s current code)')
+  .option('--revision <id>', 'Advanced: saved comparison ID or prefix', (value: string, previous: string | undefined) => {
     if (previous !== undefined) throw new InvalidArgumentError('Use --revision only once. Usage: git discuss review comment <review-id> "message" [--revision <revision-id>]');
     return value;
   })
   .option('--reply-to <id>', 'Parent comment ID within this review')
   .action(async (id, body, options) => {
     const comment = await (await reviews()).addReviewComment(id, {
-      body, revisionId: options.revision, replyTo: options.replyTo,
+      body, revisionId: options.revision, commit: options.commit, replyTo: options.replyTo,
     });
     console.log(`Saved locally: ${comment.id}\nRevision: ${comment.revisionId}\nHead: ${comment.commit}`);
   });

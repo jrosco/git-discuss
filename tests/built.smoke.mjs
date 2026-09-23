@@ -10,7 +10,7 @@ import { fileURLToPath } from 'node:url';
 const execute = promisify(execFile);
 const cli = fileURLToPath(new URL('../dist/cli.js', import.meta.url));
 
-test('built CLI serves browser assets and shares persisted comments with the API', { timeout: 60000 }, async t => {
+test('built CLI serves browser assets and shares persisted notes with the API', { timeout: 120000 }, async t => {
   const directory = await mkdtemp(path.join(tmpdir(), 'git-discuss-smoke-'));
   let server;
   t.after(async () => {
@@ -24,16 +24,17 @@ test('built CLI serves browser assets and shares persisted comments with the API
   await git('config', 'user.name', 'Smoke Tester');
   await git('config', 'user.email', 'smoke@example.test');
   await git('-c', 'commit.gpgsign=false', 'commit', '--allow-empty', '-m', 'Smoke revision');
+  const originalHead = (await git('rev-parse', 'HEAD')).stdout.trim();
   await execute(process.execPath, [cli, '--repo', directory, 'comment', 'CLI comment']);
   const run = (...args) => execute(process.execPath, [cli, '--repo', directory, ...args]);
-  const review = JSON.parse((await run('review', 'create', 'Smoke review', '--base', 'HEAD')).stdout);
+  const review = JSON.parse((await run('review', 'create', 'Smoke review', '--base', 'HEAD', '--pinned')).stdout);
   await run('review', 'comment', review.id, 'CLI review reasoning', '--revision', review.revisions[0].id);
   await git('-c', 'commit.gpgsign=false', 'commit', '--allow-empty', '-m', 'Revised smoke code');
   const revised = JSON.parse((await run('review', 'revise', review.id, '--base', review.revisions[0].base)).stdout);
   assert.equal(revised.revisions.length, 2);
   assert.equal(JSON.parse((await run('review', 'list', '--json')).stdout)[0].id, review.id);
   const listing = (await run('review', 'list')).stdout;
-  assert.match(listing, /REVIEW\s+LATEST REVISION\s+REVISIONS\s+COMMENTS\s+TITLE/);
+  assert.match(listing, /REVIEW\s+CURRENT COMMIT\s+COMMITS\s+COMMENTS\s+TITLE/);
   assert.match(listing, /Smoke review/);
   assert.ok(listing.includes(review.id.slice(0, 8)));
   const latestComment = await run('review', 'comment', review.id.slice(0, 8), 'Latest by default');
@@ -79,13 +80,14 @@ test('built CLI serves browser assets and shares persisted comments with the API
   assert.equal(page.nextOffset, 1);
   const olderPage = await (await fetch(new URL(`/api/commits?ref=${page.tip}&offset=${page.nextOffset}`, url), { headers })).json();
   assert.equal(olderPage.commits[0].commit, review.revisions[0].head);
-  const discussion = await (await fetch(new URL(`/api/conversation?commit=${review.revisions[0].head}`, url), { headers })).json();
-  assert.equal(discussion.comments[0].body, 'CLI comment');
+  const discussion = await (await fetch(new URL(`/api/conversation?commit=${originalHead}`, url), { headers })).json();
+  assert.equal(discussion.note, 'CLI comment');
+  assert.deepEqual(discussion.comments, []);
   const reply = await fetch(new URL('/api/comments', url), { method: 'POST', headers,
-    body: JSON.stringify({ commit: discussion.commit, body: 'Browser reply', replyTo: discussion.comments[0].id }) });
+    body: JSON.stringify({ commit: discussion.commit, body: 'Browser reply', action: 'append' }) });
   assert.equal(reply.status, 201);
   const shown = await run('show', '--commit', discussion.commit);
-  assert.equal(JSON.parse(shown.stdout).comments[1].body, 'Browser reply');
+  assert.ok(JSON.parse(shown.stdout).note.includes('Browser reply'));
   const apiReview = await (await fetch(new URL(`/api/reviews/${review.id}`, url), { headers })).json();
   assert.equal(apiReview.comments[0].body, 'CLI review reasoning');
   const reviewReply = await fetch(new URL(`/api/reviews/${review.id}/comments`, url), { method: 'POST', headers,
@@ -100,9 +102,18 @@ test('built CLI serves browser assets and shares persisted comments with the API
   const oldComment = JSON.parse((await run('review', 'show', review.id)).stdout).comments[3];
   assert.equal(oldComment.revisionId, review.revisions[0].id);
   assert.equal(oldComment.replyTo, apiReview.comments[0].id);
+  await run('review', 'comment', review.id, 'Pinned to an earlier commit', '--commit', review.revisions[0].head);
+  assert.equal(JSON.parse((await run('review', 'show', review.id)).stdout).comments[4].commit, review.revisions[0].head);
   const syncResponse = await fetch(new URL('/api/sync', url), { method: 'POST', headers, body: '{"remote":"origin"}' });
   assert.equal(syncResponse.status, 200);
   assert.equal((await syncResponse.json()).uploaded, 2);
+  const tracked = JSON.parse((await run('review', 'create', 'Default branch-following review', '--base', 'HEAD')).stdout);
+  assert.equal(tracked.schema, 3);
+  assert.match(tracked.tracking.branch, /^refs\/heads\//);
+  assert.equal(tracked.currentRevisionId, tracked.revisions[0].id);
+  assert.equal(JSON.parse((await run('sync', '--json')).stdout).uploaded, 1);
+  assert.equal(JSON.parse((await run('review', 'show', tracked.id)).stdout).trackingStatus.state, 'missing');
+  await run('review', 'delete', tracked.id);
   await run('review', 'delete', review.id.slice(0, 8));
   assert.deepEqual(JSON.parse((await run('review', 'list', '--json')).stdout), []);
   assert.match((await run('review', 'list')).stdout, /No reviews yet/);

@@ -17,6 +17,17 @@ function fake(receive: (input: { remote?: string }, signal?: AbortSignal) => Pro
   return { repository: { remotes: async () => ['origin'] }, receive } as unknown as Synchronization;
 }
 
+test('metadata-only ref updates do not advertise nonexistent feedback changes', async t => {
+  const worker = new BackgroundUpdates(fake(async () => ({
+    remote: 'origin', updatedRefs: ['refs/notes/git-discuss'], updatedReviewIds: [], updatedNoteCommits: [],
+  })), 10000);
+  t.after(() => worker.close());
+  await worker.configure({ enabled: true, remote: 'origin' });
+  await until(() => Boolean(worker.status().lastSuccessAt));
+  assert.equal(worker.status().revision, 0);
+  assert.equal(worker.status().latestChangeSummary, null);
+});
+
 test('automatic polling never overlaps, reports actual changes, and stops when disabled', async t => {
   let calls = 0;
   const releases: ((result: ReceiveResult) => void)[] = [];
@@ -39,7 +50,10 @@ test('automatic polling never overlaps, reports actual changes, and stops when d
   await until(() => calls === 2);
   releases[1]({ remote: 'origin', updatedRefs: ['refs/notes/git-discuss'] });
   await until(() => worker.status().revision === 1);
+  assert.equal(worker.status().latestChangeSummary?.remote, 'origin');
+  assert.equal(worker.status().latestChangeSummary?.notesUpdated, true);
   await worker.configure({ enabled: false, remote: 'origin' });
+  assert.equal(worker.status().latestChangeSummary?.notesUpdated, true, 'Disabling checks must not erase an unapplied update summary');
   const stopped = calls;
   await delay(150);
   assert.equal(calls, stopped);

@@ -6,10 +6,19 @@ import { ReviewsWorkspace } from './reviews.js';
 import { CommitNotesWorkspace } from './commit-notes.js';
 import { SharingPanel } from './sharing.js';
 import './styles.css';
-import type { SyncResult } from '../core/models.js';
+import type { BackgroundUpdateStatus, SyncResult } from '../core/models.js';
 import type { ComposerSharing } from './submission.js';
 
 type Theme = 'light' | 'dark';
+type Workspace = 'reviews' | 'notes';
+const workspaceStorageKey = 'git-discuss-workspace';
+function initialWorkspace(): Workspace {
+  try {
+    const saved = sessionStorage.getItem(workspaceStorageKey);
+    if (saved === 'reviews' || saved === 'notes') return saved;
+  } catch { /* Navigation still works if browser storage is unavailable. */ }
+  return 'reviews';
+}
 type RepositoryInfo = { root: string; initialCommit: string; currentBranch: string | null };
 const themeStorageKey = 'git-discuss-theme';
 function initialTheme(): Theme {
@@ -24,12 +33,16 @@ document.documentElement.dataset.theme = startingTheme;
 
 function App() {
   const [theme, setTheme] = useState<Theme>(startingTheme);
-  const [workspace, setWorkspace] = useState<'reviews' | 'notes'>('reviews');
+  const [workspace, setWorkspace] = useState<Workspace>(initialWorkspace);
+  useEffect(() => {
+    try { sessionStorage.setItem(workspaceStorageKey, workspace); } catch { /* Keep navigation usable without storage. */ }
+  }, [workspace]);
   const [repository, setRepository] = useState<RepositoryInfo | null>(null);
   const [error, setError] = useState('');
   const [syncing, setSyncing] = useState(false);
   const [syncVersion, setSyncVersion] = useState(0);
   const [backgroundRevision, setBackgroundRevision] = useState(0);
+  const [backgroundSummary, setBackgroundSummary] = useState<BackgroundUpdateStatus['latestChangeSummary']>(null);
   const [localChanges, setLocalChanges] = useState(false);
   const [sharingRemote, setSharingRemote] = useState('');
   const [shareSuccessVersion, setShareSuccessVersion] = useState(0);
@@ -63,7 +76,7 @@ function App() {
   }
   const projectName = repository?.root.replace(/[\\/]$/, '').split(/[\\/]/).pop();
   return <main>
-    <a className="skip-link" href="#workspace-content">Skip to discussions</a>
+    <a className="skip-link" href="#workspace-content">Skip to reviews and notes</a>
     <header className="page-header">
       <div className="app-brand"><svg aria-hidden="true" viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" strokeWidth="1.7"><path d="M6 7v10M17 17V9a5 5 0 0 0-5-5h-1" /><circle cx="6" cy="4" r="2.5" /><circle cx="6" cy="20" r="2.5" /><circle cx="17" cy="20" r="2.5" /><path d="m14 1-3 3 3 3" /></svg><h1>Git Discuss</h1></div>
       <div className="header-actions">
@@ -100,8 +113,8 @@ function App() {
         </button>
         <details className="workspace-guide"><summary>Which should I use?</summary>
           <p><strong>Reviews</strong> keep feedback together as you update your code. Start here for most team reviews.</p>
-          <p><strong>Change notes</strong> attach a discussion to one saved snapshot, called a commit in Git.</p>
-          <p>These are separate discussions. Switching between them keeps your drafts in this open page.</p>
+          <p><strong>Change notes</strong> attach notes to one saved snapshot, called a commit in Git.</p>
+          <p>These are separate workspaces. Switching between them keeps your drafts in this open page.</p>
         </details>
       </nav>
       <fieldset id="workspace-content" tabIndex={-1} className="workspace-content workspace-controls" disabled={syncing}>
@@ -109,22 +122,22 @@ function App() {
         {/* Keep both mounted: navigation and sharing must not discard drafts or selected versions. */}
         <section id="reviews-workspace" aria-labelledby="reviews-heading" hidden={workspace !== 'reviews'}>
           <header className="workspace-heading"><div className="eyebrow">DISCUSS WORK IN PROGRESS</div><h2 id="reviews-heading">Reviews</h2>
-            <p>Choose changes, ask for feedback, and keep the conversation together as you update your code.</p></header>
-          {repository && <ReviewsWorkspace syncVersion={syncVersion} backgroundRevision={backgroundRevision} sharing={composerSharing} sidebarTarget={reviewDetailsTarget} onSaved={() => setLocalChanges(true)} onShare={showSharing} />}
+            <p>Review a branch and keep the conversation together as new commits are pushed.</p></header>
+          {repository && <ReviewsWorkspace syncVersion={syncVersion} backgroundRevision={backgroundRevision} backgroundSummary={backgroundSummary} sharing={composerSharing} sidebarTarget={reviewDetailsTarget} onSaved={() => setLocalChanges(true)} onShare={showSharing} />}
         </section>
         <section id="notes-workspace" aria-labelledby="notes-heading" hidden={workspace !== 'notes'}>
           <header className="workspace-heading"><div className="eyebrow">CAPTURE CONTEXT FOR ONE CHANGE</div><h2 id="notes-heading">Change notes</h2>
             <p>Leave a question or explanation on a specific saved change. The note stays with that snapshot of the code.</p></header>
-          {repository && <CommitNotesWorkspace initialCommit={repository.initialCommit} syncVersion={syncVersion} backgroundRevision={backgroundRevision} sharing={composerSharing} onSaved={() => setLocalChanges(true)} onShare={showSharing} />}
+          {repository && <CommitNotesWorkspace initialCommit={repository.initialCommit} syncVersion={syncVersion} backgroundRevision={backgroundRevision} backgroundSummary={backgroundSummary} sharing={composerSharing} onSaved={() => setLocalChanges(true)} onShare={showSharing} />}
         </section>
       </fieldset>
       {repository && <aside className="sharing-sidebar" aria-label="Team sharing and review details">
         <div id="sharing-area" tabIndex={-1}><SharingPanel busy={syncing} localChanges={localChanges} onBusy={setSyncing} onBackgroundRevision={setBackgroundRevision}
-          onRemoteChange={setSharingRemote} externalResult={immediateShareResult} onFinished={success => {
+          onBackgroundSummary={setBackgroundSummary} onRemoteChange={setSharingRemote} externalResult={immediateShareResult} onFinished={success => {
           setSyncVersion(version => version + 1); if (success) { setLocalChanges(false); setShareSuccessVersion(version => version + 1); }
         }} /></div>
         <fieldset disabled={syncing} hidden={workspace !== 'reviews'} className="review-sidebar-controls">
-          <legend className="sr-only">Review version and details</legend>
+          <legend className="sr-only">Reviewed code and details</legend>
           <div ref={setReviewDetailsTarget} />
         </fieldset>
       </aside>}
