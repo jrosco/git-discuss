@@ -12,6 +12,7 @@ function ChangePicker({ initialCommit, conversation, syncVersion, backgroundRevi
   const [branch, setBranch] = useState(initialCommit);
   const [customRef, setCustomRef] = useState('');
   const [history, setHistory] = useState<CommitPage | null>(null);
+  const [notesOnly, setNotesOnly] = useState(false);
   const [browsing, setBrowsing] = useState(true);
   const [error, setError] = useState('');
   const [countError, setCountError] = useState('');
@@ -55,6 +56,7 @@ function ChangePicker({ initialCommit, conversation, syncVersion, backgroundRevi
     finally { setBrowsing(false); }
   }
   const disabled = busy || browsing;
+  const visibleCommits = history?.commits.filter(item => !notesOnly || item.noteCount === 1) ?? [];
   return <section className="card change-picker" aria-label="Find a saved change">
     <h3>Choose a saved change</h3>
     <p className="form-intro">A saved change is called a <strong>commit</strong> in Git. Open one below to read or leave a note.</p>
@@ -64,32 +66,33 @@ function ChangePicker({ initialCommit, conversation, syncVersion, backgroundRevi
       {branch !== 'HEAD' && !branches.some(item => item.ref === branch) && <option value={branch}>Starting code · {branch}</option>}
     </select><button type="button" className="secondary-button" disabled={disabled} onClick={() => void browse(branch)}>Refresh list</button></div>
     <p className="field-hint">Branches are named lines of work. Team branches show the code last downloaded to this computer.</p>
+    <form onSubmit={event => { event.preventDefault(); void onLoad(customRef); }}>
+      <label htmlFor="custom-commit">Commit ID or branch name</label>
+      <div className="row"><input id="custom-commit" disabled={disabled} value={customRef} onChange={event => setCustomRef(event.target.value)} required maxLength={256} placeholder="Paste a commit ID or enter a branch name" />
+        <button disabled={disabled || !customRef.trim()}>Open notes</button></div>
+    </form>
+    <label className="checkbox-label notes-only-toggle"><input type="checkbox" checked={notesOnly} onChange={event => setNotesOnly(event.target.checked)} disabled={disabled} />
+      Show only commits with notes</label>
     <ErrorNotice message={error} onRetry={() => void browse(branch)} />
     {countError && <p className="field-hint" role="status">Note counts could not be refreshed. Choose Refresh list to try again.</p>}
     {browsing && <p role="status" className="muted">Finding saved changes…</p>}
     {history && <>
-      <ul className="change-list" aria-label="Saved changes, newest first">{history.commits.map(item => <li key={item.commit}>
+      <ul className="change-list" aria-label="Saved changes, newest first">{visibleCommits.map(item => <li key={item.commit}>
         <button type="button" className="change-card" disabled={disabled} aria-current={currentCommit === item.commit ? 'true' : undefined} onClick={() => void onLoad(item.commit)}>
           <span className="change-title"><span>{item.subject || 'Untitled change'}</span><span className="change-badges">
-            <span className={`note-count${item.noteCount ? ' has-notes' : ''}`} title="Notes, excluding deleted entries">
+            {item.noteCount === 1 && <span className="note-count has-notes" title="Note saved on this commit">
               <svg aria-hidden="true" viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.3"><path d="M3 2.5h10a1 1 0 0 1 1 1v7a1 1 0 0 1-1 1H7l-4 3v-3H3a1 1 0 0 1-1-1v-7a1 1 0 0 1 1-1Z" /></svg>
-              {item.noteCount === null ? 'Notes unavailable' : `${item.noteCount} ${item.noteCount === 1 ? 'note' : 'notes'}`}
-            </span>
+              <span className="sr-only">Note saved on this commit</span>
+            </span>}
             {currentCommit === item.commit && <span className="version-badge">Open</span>}
           </span></span>
           <span className="review-card-meta">{item.author} · {new Date(item.authoredAt).toLocaleDateString()} <code>{item.commit.slice(0, 8)}</code></span>
         </button>
       </li>)}</ul>
+      {!visibleCommits.length && <p className="empty">No saved changes match this filter.</p>}
       <div className="commit-history-footer"><small>{history.commits.length} saved changes{history.nextOffset === null ? ' · End of history' : ''}</small>
         {history.nextOffset !== null && <button type="button" className="text-button" disabled={disabled} onClick={() => void loadOlder()}>Show older changes</button>}</div>
     </>}
-    <details className="technical-details"><summary>Have a specific commit ID or branch?</summary>
-      <form onSubmit={event => { event.preventDefault(); void onLoad(customRef); }}>
-        <label htmlFor="custom-commit">Commit ID or branch name</label>
-        <div className="row"><input id="custom-commit" disabled={disabled} value={customRef} onChange={event => setCustomRef(event.target.value)} required maxLength={256} placeholder="Paste a commit ID or enter a branch name" />
-          <button disabled={disabled || !customRef.trim()}>Open notes</button></div>
-      </form>
-    </details>
   </section>;
 }
 
