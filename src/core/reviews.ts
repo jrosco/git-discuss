@@ -1,11 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { Repository } from '../git/repository.js';
-import { addCommentSchema, commentSchema, type AddComment, type Comment, type Conversation } from './models.js';
+import { addCommentSchema, commentSchema, type AddComment, type Comment, type Conversation, type SavedCommitNote } from './models.js';
 import { createReviewSchema, revisionInputSchema, reviewCommentInputSchema, reviewSchema, type Review, type RevisionDiff } from './models.js';
 import { resolveIdentifier } from './identifiers.js';
 import { commentChangeSchema, commentMutationSchema, reviewMutationSchema, type CommentMutation, type ReviewMutation } from './models.js';
-import { isDeleted, recordVersion } from './changes.js';
+import { isDeleted, recordVersion, MAX_COMMIT_NOTE_LENGTH } from './changes.js';
 
 export class Reviews {
   constructor(readonly repository: Repository) {}
@@ -100,7 +100,7 @@ export class Reviews {
   }
 
   async changeCommitComment(ref: string, commentId: string, input: CommentMutation): Promise<Conversation> {
-    void ref; void commentId; void input; void commentMutationSchema;
+    void ref; void commentId; void input;
     throw new Error('Commit notes are plain text and no longer support per-comment edit endpoints. Use Save note on the commit instead.');
   }
 
@@ -165,36 +165,40 @@ export class Reviews {
 
   async conversation(ref: string): Promise<Conversation> {
     const commit = await this.repository.resolve(ref);
-    const note = await this.repository.readNote(commit);
+    const snapshot = await this.repository.noteSnapshot(commit);
     return {
       commit,
       subject: await this.repository.git('show', '-s', '--format=%s', commit, '--'),
       comments: [],
-      note: note || null,
+      ...snapshot,
     };
   }
 
-  async addComment(input: AddComment): Promise<Comment> {
+  async addComment(input: AddComment): Promise<SavedCommitNote> {
     const parsed = addCommentSchema.parse(input);
     const commit = await this.repository.resolve(parsed.commit);
     return this.repository.withWriteLock(async () => {
       const name = await this.repository.git('config', '--get', 'user.name');
       const email = await this.repository.git('config', '--get', 'user.email');
-      const existing = await this.repository.readNote(commit);
+      const snapshot = await this.repository.noteSnapshot(commit);
+      const existing = snapshot.note;
+      if (parsed.expectedVersion !== undefined && parsed.expectedVersion !== snapshot.noteVersion) {
+        throw new Error('This note changed since you opened it. Your draft has not been saved. Cancel and reload the latest note before editing or deleting.');
+      }
+      if (existing !== null && ['set', 'edit', 'delete'].includes(parsed.action) && parsed.expectedVersion === undefined) {
+        throw new Error('Reload this note before replacing or deleting it: the current note version is required.');
+      }
       const body = parsed.body;
-      if (parsed.action === 'add' && existing) throw new Error('A note already exists on this commit. Choose Edit or Append.');
-      if (parsed.action === 'edit' && !existing) throw new Error('No note exists on this commit yet. Choose Add note.');
-      if (parsed.action === 'append' && !existing) throw new Error('No note exists on this commit yet. Add a note before appending.');
+      if (parsed.action === 'add' && existing !== null) throw new Error('A note already exists on this commit. Choose Edit or Append.');
+      if (parsed.action === 'edit' && existing === null) throw new Error('No note exists on this commit yet. Choose Add note.');
+      if (parsed.action === 'append' && existing === null) throw new Error('No note exists on this commit yet. Add a note before appending.');
       if (parsed.action !== 'delete' && !body.trim()) throw new Error('Note text cannot be empty.');
-      const comment = commentSchema.parse({
-        schema: 1, type: 'comment', id: randomUUID(), commit,
-        author: { name, email }, createdAt: new Date().toISOString(),
-        replyTo: null, body: body.trim() || '(empty note)',
-      });
+      const note = parsed.action === 'append' ? `${existing}\n\n${body}` : body;
+      if (parsed.action !== 'delete' && note.length > MAX_COMMIT_NOTE_LENGTH) throw new Error(`A commit note cannot exceed ${MAX_COMMIT_NOTE_LENGTH.toLocaleString()} characters, including appended text.`);
+      const comment = { id: randomUUID(), commit, author: commentSchema.shape.author.parse({ name, email }), createdAt: new Date().toISOString(), body };
       if (parsed.action === 'delete') await this.repository.removeNote(commit);
-      else if (parsed.action === 'append') await this.repository.appendNote(commit, body);
-      else await this.repository.writeNote(commit, body);
-      return comment;
+      else await this.repository.writeNote(commit, note);
+      return { ...comment, ...await this.repository.noteSnapshot(commit) };
     });
   }
 }

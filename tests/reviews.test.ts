@@ -13,6 +13,42 @@ import { commentBody, isDeleted, recordVersion, reviewTitle } from '../src/core/
 
 const execute = promisify(execFile);
 
+test('raw notes preserve Markdown whitespace and reject stale or unversioned replacement', async t => {
+  const { directory, engine } = await fixture();
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const text = '    indented code\nline break  \nnext line\n\n';
+  const saved = await engine.addComment({ commit: 'HEAD', body: text, action: 'add', expectedVersion: null });
+  assert.equal(saved.note, text);
+  assert.ok(saved.noteVersion);
+  const first = await engine.conversation('HEAD');
+  assert.equal(first.note, text);
+  assert.equal(first.noteVersion, saved.noteVersion);
+  const edited = await engine.addComment({ commit: 'HEAD', body: 'Changed by another writer', action: 'edit', expectedVersion: first.noteVersion });
+  await assert.rejects(engine.addComment({ commit: 'HEAD', body: 'Stale edit', action: 'edit', expectedVersion: first.noteVersion }), /changed since/);
+  await assert.rejects(engine.addComment({ commit: 'HEAD', action: 'delete', expectedVersion: first.noteVersion }), /changed since/);
+  await assert.rejects(engine.addComment({ commit: 'HEAD', body: 'Unversioned overwrite' }), /version is required/);
+  assert.equal((await engine.conversation('HEAD')).note, 'Changed by another writer');
+  const deleted = await engine.addComment({ commit: 'HEAD', action: 'delete', expectedVersion: edited.noteVersion });
+  assert.equal(deleted.note, null); assert.equal(deleted.noteVersion, null);
+  await engine.repository.writeNote(first.commit, '');
+  const empty = await engine.conversation(first.commit);
+  assert.equal(empty.note, ''); assert.ok(empty.noteVersion);
+  await engine.addComment({ commit: first.commit, action: 'delete', expectedVersion: empty.noteVersion });
+  assert.equal((await engine.conversation(first.commit)).note, null);
+});
+
+test('notes built by appending can be edited as a whole and over-limit appends do not write', async t => {
+  const { directory, engine } = await fixture();
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  await engine.addComment({ commit: 'HEAD', body: 'x'.repeat(20000) });
+  const appended = await engine.addComment({ commit: 'HEAD', action: 'append', body: 'y'.repeat(20000) });
+  const edited = await engine.addComment({ commit: 'HEAD', action: 'edit', body: appended.note!.replace('x', 'z'), expectedVersion: appended.noteVersion });
+  assert.equal(edited.note?.length, 40002);
+  assert.ok(edited.note?.startsWith('z'));
+  await assert.rejects(engine.addComment({ commit: 'HEAD', action: 'append', body: 'a'.repeat(60000) }), /cannot exceed/);
+  assert.equal((await engine.conversation('HEAD')).note, edited.note);
+});
+
 async function fixture() {
   const directory = await mkdtemp(path.join(tmpdir(), 'git-discuss-test-'));
   const git = (...args: string[]) => execute('git', ['-C', directory, ...args]);
@@ -51,10 +87,10 @@ test('edits retain history, reject stale versions, and deletions do not remove o
   const note = await engine.addComment({ commit: 'HEAD', body: 'Original note' });
   assert.equal(note.author.name, 'Review Tester');
   await assert.rejects(engine.addComment({ commit: 'HEAD', action: 'add', body: 'Duplicate add' }), /already exists/);
-  await assert.rejects(engine.addComment({ commit: 'HEAD', action: 'edit', body: '   ' }), /cannot be empty/);
-  await engine.addComment({ commit: 'HEAD', action: 'edit', body: 'Updated note' });
+  await assert.rejects(engine.addComment({ commit: 'HEAD', action: 'edit', body: '   ', expectedVersion: note.noteVersion }), /cannot be empty/);
+  await engine.addComment({ commit: 'HEAD', action: 'edit', body: 'Updated note', expectedVersion: note.noteVersion });
   assert.equal((await engine.conversation(original)).note, 'Updated note');
-  await engine.addComment({ commit: 'HEAD', action: 'delete', body: '' });
+  await engine.addComment({ commit: 'HEAD', action: 'delete', body: '', expectedVersion: (await engine.conversation('HEAD')).noteVersion });
   assert.equal((await engine.conversation(original)).note, null);
   await assert.rejects(engine.addComment({ commit: 'HEAD', action: 'append', body: 'Again' }), /before appending/);
   await git('-c', 'commit.gpgsign=false', 'commit', '--allow-empty', '-m', 'Another commit');
@@ -100,7 +136,7 @@ test('mutation API requires authentication and validates edits and deletion targ
   assert.deepEqual(await (await fetch(`${address}/api/reviews`, { headers })).json(), []);
   const note = await engine.addComment({ commit: 'HEAD', body: 'Note to delete' });
   assert.equal((await fetch(`${address}/api/comments`, { method: 'POST', headers,
-    body: JSON.stringify({ commit: note.commit, action: 'delete', body: '' }) })).status, 201);
+    body: JSON.stringify({ commit: note.commit, action: 'delete', body: '', expectedVersion: note.noteVersion }) })).status, 201);
   assert.equal((await engine.conversation('HEAD')).note, null);
 });
 
@@ -135,16 +171,16 @@ test('commit note counts include notes, exclude deletions, and isolate each comm
   const original = await engine.repository.resolve('HEAD');
   assert.equal((await engine.repository.commits()).commits[0].noteCount, 0);
   await engine.addComment({ commit: original, body: 'Question' });
-  await engine.addComment({ commit: original, action: 'edit', body: 'Answer' });
+  await engine.addComment({ commit: original, action: 'edit', body: 'Answer', expectedVersion: (await engine.conversation(original)).noteVersion });
   await git('-c', 'commit.gpgsign=false', 'commit', '--allow-empty', '-m', 'Another change');
   const next = await engine.repository.resolve('HEAD');
   const review = await engine.createReview({ title: 'Independent review', base: original, head: next });
   await engine.addReviewComment(review.id, { body: 'Not a commit note' });
   assert.equal((await engine.repository.commits({ limit: 1 })).commits[0].noteCount, 0);
   assert.equal((await engine.repository.commits({ offset: 1 })).commits[0].noteCount, 1);
-  await engine.addComment({ commit: original, action: 'edit', body: 'Edited question' });
+  await engine.addComment({ commit: original, action: 'edit', body: 'Edited question', expectedVersion: (await engine.conversation(original)).noteVersion });
   assert.deepEqual(await engine.repository.noteCounts([original, next]), { [original]: 1, [next]: 0 });
-  await engine.addComment({ commit: original, action: 'delete', body: '' });
+  await engine.addComment({ commit: original, action: 'delete', body: '', expectedVersion: (await engine.conversation(original)).noteVersion });
   assert.equal((await engine.repository.noteCounts([original]))[original], 0);
   await engine.repository.writeNote(next, 'Not a structured discussion');
   assert.deepEqual(await engine.repository.noteCounts([original, next]), { [original]: 0, [next]: 1 });

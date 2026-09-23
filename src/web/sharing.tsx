@@ -29,10 +29,9 @@ export function SharingPanel({ busy, localChanges, onBusy, onFinished, onBackgro
     const notes = summary.notesUpdated ? 'change notes updated' : '';
     const ids = summary.sampleReviewIds.length ? ` (${summary.sampleReviewIds.slice(0, 5).map(id => id.slice(0, 8)).join(', ')})` : '';
     const commits = summary.sampleNoteCommits.length ? ` [${summary.sampleNoteCommits.slice(0, 5).map(id => id.slice(0, 8)).join(', ')}]` : '';
-    const overwritten = summary.noteOverwriteCommits.length ? ` Overwrote local note text on: ${summary.noteOverwriteCommits.slice(0, 5).map(id => id.slice(0, 8)).join(', ')}.` : '';
     if (reviews && notes) return `${reviews} and ${notes}${ids}${commits}.`;
-    if (reviews) return `${reviews}${ids}.${overwritten}`;
-    return `${notes}${commits}.${overwritten}`;
+    if (reviews) return `${reviews}${ids}.`;
+    return `${notes}${commits}.`;
   }
   useEffect(() => { onRemoteChange(loading || settingsBusy ? '' : remote); }, [remote, loading, settingsBusy, onRemoteChange]);
   useEffect(() => { if (busy) setResult(null); }, [busy]);
@@ -42,9 +41,7 @@ export function SharingPanel({ busy, localChanges, onBusy, onFinished, onBackgro
   function showStatus(status: BackgroundUpdateStatus) {
     statusEpoch.current++;
     setBackground(status); onBackgroundRevision(status.revision);
-    if (status.latestChangeSummary && (status.latestChangeSummary.notesUpdated || status.latestChangeSummary.reviewsUpdated > 0)) {
-      onBackgroundSummary(status.latestChangeSummary);
-    }
+    onBackgroundSummary(status.latestChangeSummary);
     setStatusError(false);
   }
   useEffect(() => {
@@ -143,7 +140,7 @@ export function SharingPanel({ busy, localChanges, onBusy, onFinished, onBackgro
         : 'Automatic updates off · Enable them in Sharing settings & help.'}
     </div>
     {background?.latestChangeSummary && summaryText(background.latestChangeSummary) &&
-      <p className="field-hint">Last update summary: {summaryText(background.latestChangeSummary)}</p>}
+      <p className="field-hint">Last update from {background.latestChangeSummary.remote}: {summaryText(background.latestChangeSummary)}</p>}
     {background?.error && <details className="background-error"><summary>Update check details</summary><pre>{background.error}</pre></details>}
     {busy && <p role="status" className="inline-hint">Getting team feedback, combining saved additions, and sharing your updates. Keep Git Discuss running until this finishes.</p>}
     <ErrorNotice message={error} />

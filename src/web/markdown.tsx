@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import rehypeSanitize from 'rehype-sanitize';
 import remarkGfm from 'remark-gfm';
@@ -40,6 +40,10 @@ type MarkdownEditorProps = {
   hint?: string;
 };
 
+export function focusMarkdownEditor(id: string) {
+  document.getElementById(id)?.dispatchEvent(new Event('markdown-focus'));
+}
+
 export function MarkdownEditor({
   id,
   label,
@@ -55,8 +59,21 @@ export function MarkdownEditor({
 }: MarkdownEditorProps) {
   const areaRef = useRef<HTMLTextAreaElement | null>(null);
   const [tab, setTab] = useState<'write' | 'preview'>('write');
+  const [limitMessage, setLimitMessage] = useState('');
+  useEffect(() => {
+    const area = areaRef.current;
+    const focus = () => { setTab('write'); requestAnimationFrame(() => area?.focus()); };
+    area?.addEventListener('markdown-focus', focus);
+    return () => area?.removeEventListener('markdown-focus', focus);
+  }, []);
+  useEffect(() => { if (!value) setTab('write'); }, [value]);
 
   function applyEdit(nextValue: string, selectionStart: number, selectionEnd: number) {
+    if (maxLength !== undefined && nextValue.length > maxLength) {
+      setLimitMessage(`This formatting would exceed the ${maxLength.toLocaleString()} character limit.`);
+      return;
+    }
+    setLimitMessage(''); setTab('write');
     onChange(nextValue);
     requestAnimationFrame(() => {
       if (!areaRef.current) return;
@@ -112,26 +129,32 @@ export function MarkdownEditor({
         <button type="button" className="text-button" disabled={disabled} onClick={insertLink}>Link</button>
         <button type="button" className="text-button" disabled={disabled} onClick={() => insertText('🙂')}>Emoji</button>
       </div>
-      <div className="markdown-tabs" role="tablist" aria-label="Write or preview">
-        <button type="button" role="tab" aria-selected={tab === 'write'} className="text-button" onClick={() => setTab('write')}>Write</button>
-        <button type="button" role="tab" aria-selected={tab === 'preview'} className="text-button" onClick={() => setTab('preview')}>Preview</button>
+      <div className="markdown-tabs" role="tablist" aria-label="Write or preview" onKeyDown={event => {
+        if (disabled || !['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+        event.preventDefault();
+        const next = event.key === 'Home' ? 'write' : event.key === 'End' ? 'preview' : tab === 'write' ? 'preview' : 'write';
+        setTab(next); requestAnimationFrame(() => document.getElementById(`${id}-${next}-tab`)?.focus());
+      }}>
+        <button id={`${id}-write-tab`} type="button" role="tab" aria-controls={`${id}-write-panel`} aria-selected={tab === 'write'} tabIndex={tab === 'write' ? 0 : -1} disabled={disabled} className="text-button" onClick={() => setTab('write')}>Write</button>
+        <button id={`${id}-preview-tab`} type="button" role="tab" aria-controls={`${id}-preview-panel`} aria-selected={tab === 'preview'} tabIndex={tab === 'preview' ? 0 : -1} disabled={disabled} className="text-button" onClick={() => setTab('preview')}>Preview</button>
       </div>
     </div>
-    {tab === 'write' && <textarea
+    <div id={`${id}-write-panel`} role="tabpanel" aria-labelledby={`${id}-write-tab`} hidden={tab !== 'write'}><textarea
       id={id}
       ref={areaRef}
       value={value}
-      onChange={event => onChange(event.target.value)}
+      onChange={event => { setLimitMessage(''); onChange(event.target.value); }}
       placeholder={placeholder}
       maxLength={maxLength}
       rows={rows}
       required={required}
       disabled={disabled}
       autoFocus={autoFocus}
-    />}
-    {tab === 'preview' && <div className="markdown-preview-panel" role="tabpanel" aria-label="Rendered preview">
-      <MarkdownPreview value={value} emptyMessage="Nothing to preview yet. Start writing in the Write tab." />
-    </div>}
+    /></div>
+    <div id={`${id}-preview-panel`} className="markdown-preview-panel" role="tabpanel" aria-labelledby={`${id}-preview-tab`} hidden={tab !== 'preview'}>
+      {tab === 'preview' && <MarkdownPreview value={value} emptyMessage="Nothing to preview yet. Start writing in the Write tab." />}
+    </div>
+    {limitMessage && <p className="field-hint" role="alert">{limitMessage}</p>}
     {hint && <p className="field-hint">{hint}</p>}
   </div>;
 }

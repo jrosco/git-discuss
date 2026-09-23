@@ -25,11 +25,15 @@ export class Repository {
   }
 
   async git(...args: string[]): Promise<string> {
+    return (await this.gitRaw(...args)).trim();
+  }
+
+  async gitRaw(...args: string[]): Promise<string> {
     try {
       const { stdout } = await execute('git', ['-C', this.root, ...args], {
         encoding: 'utf8', maxBuffer: 16 * 1024 * 1024,
       });
-      return stdout.trim();
+      return stdout;
     } catch (error) {
       const detail = error as Error & { stderr?: string };
       throw new Error(detail.stderr?.trim() || detail.message);
@@ -59,6 +63,16 @@ export class Repository {
       return true;
     } catch (error) {
       if ((error as { code?: number }).code === 1) return false;
+      throw error;
+    }
+  }
+
+  async mergeBases(left: string, right: string): Promise<string[]> {
+    try {
+      const { stdout } = await execute('git', ['-C', this.root, 'merge-base', '--all', left, right], { encoding: 'utf8' });
+      return stdout.trim() ? stdout.trim().split('\n') : [];
+    } catch (error) {
+      if ((error as { code?: number }).code === 1) return [];
       throw error;
     }
   }
@@ -142,39 +156,31 @@ export class Repository {
   }
 
   async readNote(commit: string): Promise<string | null> {
+    return (await this.noteSnapshot(commit)).note;
+  }
+
+  async noteSnapshot(commit: string): Promise<{ note: string | null; noteVersion: string | null }> {
     const entries = await this.git('notes', `--ref=${NOTES_REF}`, 'list');
-    const found = entries.split('\n').some(line => line.split(' ')[1] === commit);
-    return found ? this.git('notes', `--ref=${NOTES_REF}`, 'show', commit) : null;
+    const entry = entries.split('\n').map(line => line.split(' ')).find(([, target]) => target === commit);
+    if (!entry) return { note: null, noteVersion: null };
+    return { note: await this.gitRaw('cat-file', 'blob', entry[0]), noteVersion: entry[0] };
   }
 
   async writeNote(commit: string, contents: string): Promise<void> {
-    // Send discussion data over stdin, avoiding Windows command-line limits.
-    await new Promise<void>((resolve, reject) => {
-      const child = execFile('git', ['-C', this.root, 'notes', `--ref=${NOTES_REF}`, 'add', '-f', '-F', '-', commit],
-        { encoding: 'utf8' }, (error, _stdout, stderr) => {
-          if (error) reject(new Error(stderr.trim() || error.message));
-          else resolve();
-        });
-      child.stdin?.on('error', reject);
-      child.stdin?.end(contents);
-    });
+    // Reuse an exact blob: Git's default stripspace would otherwise alter Markdown indentation
+    // and trailing spaces, including the two-space hard-line-break syntax.
+    const blob = await this.gitInput(contents, 'hash-object', '-w', '--stdin');
+    await this.git('notes', `--ref=${NOTES_REF}`, 'add', '-f', '--allow-empty', '-C', blob, commit);
   }
 
   async removeNote(commit: string): Promise<void> {
-    if (!await this.readNote(commit)) return;
+    if ((await this.noteSnapshot(commit)).noteVersion === null) return;
     await this.git('notes', `--ref=${NOTES_REF}`, 'remove', commit);
   }
 
   async appendNote(commit: string, contents: string): Promise<void> {
-    await new Promise<void>((resolve, reject) => {
-      const child = execFile('git', ['-C', this.root, 'notes', `--ref=${NOTES_REF}`, 'append', '-F', '-', commit],
-        { encoding: 'utf8' }, (error, _stdout, stderr) => {
-          if (error) reject(new Error(stderr.trim() || error.message));
-          else resolve();
-        });
-      child.stdin?.on('error', reject);
-      child.stdin?.end(contents);
-    });
+    const existing = await this.readNote(commit);
+    await this.writeNote(commit, existing === null ? contents : `${existing}\n\n${contents}`);
   }
 
   async withWriteLock<T>(operation: () => Promise<T>): Promise<T> {

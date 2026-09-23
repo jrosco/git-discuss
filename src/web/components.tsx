@@ -14,7 +14,7 @@ export function ErrorNotice({ message, onRetry }: { message: string; onRetry?: (
   else if (/changed since you opened|This item was deleted/i.test(message)) guidance = message;
   else if (/no longer available locally/i.test(message)) guidance = 'This review is no longer on this computer. Return to the review list or get team updates. Your draft has been kept.';
   else if (/too large for the browser/i.test(message)) guidance = 'This code comparison is too large to show here. You can still discuss it; a Git user can inspect the complete changes using the command in the details.';
-  else if (/Sync conflict|incompatible record|Unsupported|noncanonical/i.test(message)) guidance = 'Two copies of this discussion could not be combined automatically. Share these details with your teammate before trying again.';
+  else if (/Sync conflict|Note conflict|incompatible record|Unsupported|noncanonical/i.test(message)) guidance = 'Two copies of this discussion could not be combined automatically. Share these details with your teammate before trying again.';
   else if (/Sync upload failed/i.test(message)) guidance = 'Your discussions are saved on this computer, but sharing was not confirmed. Check your connection and access, then try sharing again.';
   else if (/Sync stopped|Authentication|Permission denied|not configured/i.test(message)) guidance = 'Could not connect or combine team feedback. Check your connection and repository access, or ask your project maintainer for help.';
   else if (/Cannot reach|full URL/i.test(message)) guidance = message;
@@ -99,7 +99,6 @@ export function UpdatesNotice({ available, editing, busy, onShow, summary, onOpe
   if (!available) return null;
   const reviewSamples = summary?.sampleReviewIds.map(id => ({ id, short: id.slice(0, 8) })) ?? [];
   const noteSamples = summary?.sampleNoteCommits.map(id => ({ id, short: id.slice(0, 8) })) ?? [];
-  const overwrittenSamples = summary?.noteOverwriteCommits.map(id => id.slice(0, 8)) ?? [];
   const listedReviewCount = reviewSamples.length;
   const extraReviewCount = Math.max(0, (summary?.reviewsUpdated ?? 0) - listedReviewCount);
   const heading = summary ?
@@ -121,12 +120,9 @@ export function UpdatesNotice({ available, editing, busy, onShow, summary, onOpe
     `Updated review IDs: ${reviewSamples.map(item => item.short).join(', ')}${extraReviewCount ? ` (+${extraReviewCount} more)` : ''}.`
     : '';
   const noteList = noteSamples.length ? `Updated change-note commits: ${noteSamples.map(item => item.short).join(', ')}.` : '';
-  const overwriteList = overwrittenSamples.length
-    ? `Latest-writer wins replaced your local note text on: ${overwrittenSamples.join(', ')}.`
-    : '';
   return <div className="updates-notice">
     <div><strong>{heading}</strong>
-      {(detail || reviewList || noteList || overwriteList) && <p className="updates-summary"><strong>Changed:</strong> {detail} {reviewList} {noteList} {overwriteList}</p>}
+      {(detail || reviewList || noteList) && <p className="updates-summary"><strong>Most recent update{summary?.remote ? ` from ${summary.remote}` : ''}:</strong> {detail} {reviewList} {noteList}</p>}
       <small>{editing ? 'Finish or cancel your edit before showing updates.' : 'Your draft and selected version will stay here.'}</small>
       {onOpenReview && listedReviewCount > 0 && <div className="row">{reviewSamples.map(item =>
         <button key={item.id} type="button" className="text-button" disabled={editing || busy} onClick={() => onOpenReview(item.id)}>Open {item.short}</button>)}

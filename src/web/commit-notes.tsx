@@ -1,12 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
-import type { BackgroundUpdateStatus, BranchChoice, Comment, CommitPage, Conversation, NoteCounts, SyncResult } from '../core/models.js';
+import type { BackgroundUpdateStatus, BranchChoice, CommitPage, Conversation, NoteCounts, SavedCommitNote, SyncResult } from '../core/models.js';
 import { api, errorMessage } from './api.js';
 import { CommentSubmitActions, ErrorNotice, SavedButUnshared, SavedNotice, UpdatesNotice } from './components.js';
-import { MarkdownEditor, MarkdownPreview } from './markdown.js';
+import { MarkdownEditor, MarkdownPreview, focusMarkdownEditor } from './markdown.js';
 import { submitFeedback, type ComposerSharing } from './submission.js';
+import { MAX_COMMIT_NOTE_LENGTH } from '../core/changes.js';
 
 function ChangePicker({ initialCommit, conversation, syncVersion, backgroundRevision, busy, onLoad }: {
-  initialCommit: string; conversation: Conversation | null; syncVersion: number; backgroundRevision: number; busy: boolean; onLoad: (ref: string) => Promise<void>;
+  initialCommit: string; conversation: Conversation | null; syncVersion: number; backgroundRevision: number; busy: boolean; onLoad: (ref: string) => Promise<boolean>;
 }) {
   const [branches, setBranches] = useState<BranchChoice[]>([]);
   const [branch, setBranch] = useState(initialCommit);
@@ -128,6 +129,12 @@ function ChangePicker({ initialCommit, conversation, syncVersion, backgroundRevi
   const remainingBranchChoices = filteredBranchChoices.filter(item => item.ref !== selectedBranch.ref);
   const branchSuggestions = [headChoice, ...(selectedNonHead ? [selectedNonHead] : []), ...remainingBranchChoices.slice(0, branchVisibleLimit)];
   const hasMoreBranchSuggestions = remainingBranchChoices.length > branchVisibleLimit;
+  const suggestionKey = suggestions.map(item => item.value).join('\0');
+  const branchSuggestionKey = branchSuggestions.map(item => item.ref).join('\0');
+  useEffect(() => { setActiveSuggestion(-1); }, [suggestionKey]);
+  useEffect(() => { setActiveBranchSuggestion(-1); }, [branchSuggestionKey]);
+  useEffect(() => { if (activeSuggestion >= 0) document.getElementById(`commit-choice-${activeSuggestion}`)?.scrollIntoView({ block: 'nearest' }); }, [activeSuggestion]);
+  useEffect(() => { if (activeBranchSuggestion >= 0) document.getElementById(`branch-choice-${activeBranchSuggestion}`)?.scrollIntoView({ block: 'nearest' }); }, [activeBranchSuggestion]);
 
   useEffect(() => {
     setBranchQuery(selectedBranch.title);
@@ -165,6 +172,7 @@ function ChangePicker({ initialCommit, conversation, syncVersion, backgroundRevi
         }}
         onFocus={() => { setBranchPickerOpen(true); setActiveBranchSuggestion(-1); }}
         onKeyDown={event => {
+          if (event.key === 'Escape') { setBranchPickerOpen(false); setActiveBranchSuggestion(-1); return; }
           if (!branchSuggestions.length) return;
           if (event.key === 'ArrowDown') {
             event.preventDefault();
@@ -174,7 +182,7 @@ function ChangePicker({ initialCommit, conversation, syncVersion, backgroundRevi
             event.preventDefault();
             setBranchPickerOpen(true);
             setActiveBranchSuggestion(index => index > 0 ? index - 1 : branchSuggestions.length - 1);
-          } else if (event.key === 'Enter' && activeBranchSuggestion >= 0) {
+          } else if (event.key === 'Enter' && branchSuggestions[activeBranchSuggestion]) {
             event.preventDefault();
             void pickBranch(branchSuggestions[activeBranchSuggestion].ref);
           } else if (event.key === 'Escape') {
@@ -183,12 +191,14 @@ function ChangePicker({ initialCommit, conversation, syncVersion, backgroundRevi
           }
         }}
         placeholder="Search branches or refs"
+        role="combobox"
+        aria-activedescendant={branchPickerOpen && branchSuggestions[activeBranchSuggestion] ? `branch-choice-${activeBranchSuggestion}` : undefined}
         aria-expanded={branchPickerOpen}
         aria-controls="branch-suggestions"
         aria-autocomplete="list" />
       {branchPickerOpen && <ul id="branch-suggestions" className="ref-suggestions" role="listbox" aria-label="Choose branch scope">
         <li className="ref-suggestions-current"><strong>Current selection:</strong> {selectedBranch.title}</li>
-        {branchSuggestions.map((item, index) => <li key={item.ref} role="option" aria-selected={item.ref === branch || index === activeBranchSuggestion}>
+        {branchSuggestions.map((item, index) => <li id={`branch-choice-${index}`} key={item.ref} role="option" aria-selected={index === activeBranchSuggestion}>
           <button type="button" className={`ref-suggestion-card${item.ref === branch || index === activeBranchSuggestion ? ' active' : ''}`} onMouseDown={event => event.preventDefault()} onClick={() => { void pickBranch(item.ref); }}>
             <span className="change-title"><span>{item.title}</span><span className="change-badges">{item.ref === branch && <span className="version-badge">Current</span>}</span></span>
             <span className="review-card-meta">{item.meta}</span>
@@ -209,6 +219,7 @@ function ChangePicker({ initialCommit, conversation, syncVersion, backgroundRevi
         }}
         onFocus={() => { setPickerOpen(true); setActiveSuggestion(-1); }}
         onKeyDown={event => {
+          if (event.key === 'Escape') { setPickerOpen(false); setActiveSuggestion(-1); return; }
           if (!suggestions.length) return;
           if (event.key === 'ArrowDown') {
             event.preventDefault();
@@ -218,7 +229,7 @@ function ChangePicker({ initialCommit, conversation, syncVersion, backgroundRevi
             event.preventDefault();
             setPickerOpen(true);
             setActiveSuggestion(index => index > 0 ? index - 1 : suggestions.length - 1);
-          } else if (event.key === 'Enter' && activeSuggestion >= 0) {
+          } else if (event.key === 'Enter' && suggestions[activeSuggestion]) {
             event.preventDefault();
             void pickSuggestion(suggestions[activeSuggestion].value);
           } else if (event.key === 'Escape') {
@@ -227,12 +238,14 @@ function ChangePicker({ initialCommit, conversation, syncVersion, backgroundRevi
           }
         }}
         required maxLength={256} placeholder="Search commits, or enter a commit ID/branch"
+        role="combobox"
+        aria-activedescendant={showSuggestions && suggestions[activeSuggestion] ? `commit-choice-${activeSuggestion}` : undefined}
         aria-expanded={showSuggestions}
         aria-controls="commit-ref-suggestions"
         aria-autocomplete="list" />
         <button disabled={disabled || !customRef.trim()}>Open notes</button></div>
       {showSuggestions && <ul id="commit-ref-suggestions" className="ref-suggestions" role="listbox" aria-label="Matching commits and branches">
-        {suggestions.map((item, index) => <li key={`${item.kind}-${item.value}`} role="option" aria-selected={activeSuggestion === index}>
+        {suggestions.map((item, index) => <li id={`commit-choice-${index}`} key={`${item.kind}-${item.value}`} role="option" aria-selected={activeSuggestion === index}>
           <button type="button" className={`ref-suggestion-card${activeSuggestion === index ? ' active' : ''}`} onMouseDown={event => event.preventDefault()} onClick={() => void pickSuggestion(item.value)}>
             <span className="change-title"><span>{item.title}</span><span className="change-badges">
               {item.kind === 'commit' && item.hasNote && <span className="note-count has-notes" title="Note saved on this commit">
@@ -245,7 +258,7 @@ function ChangePicker({ initialCommit, conversation, syncVersion, backgroundRevi
           </button>
         </li>)}
         {noSuggestions && <li className="ref-suggestions-empty" aria-live="polite">No matching commits or branches.</li>}
-        {history?.nextOffset !== null && <li className="ref-suggestions-footer"><button type="button" className="text-button" disabled={browsing} onMouseDown={event => event.preventDefault()} onClick={() => { setPickerOpen(true); void loadOlder(); }}>{browsing ? 'Loading…' : 'Show older commits'}</button></li>}
+        {history && history.nextOffset !== null && <li className="ref-suggestions-footer"><button type="button" className="text-button" disabled={browsing} onMouseDown={event => event.preventDefault()} onClick={() => { setPickerOpen(true); void loadOlder(); }}>{browsing ? 'Loading…' : 'Show older commits'}</button></li>}
       </ul>}
     </form>
     <label className="checkbox-label notes-only-toggle"><input type="checkbox" checked={notesOnly} onChange={event => setNotesOnly(event.target.checked)} disabled={loading} />
@@ -253,7 +266,7 @@ function ChangePicker({ initialCommit, conversation, syncVersion, backgroundRevi
     <ErrorNotice message={error} onRetry={() => void browse(branch)} />
     {countError && <p className="field-hint" role="status">Note counts could not be refreshed. Choose Refresh list to try again.</p>}
     {browsing && <p role="status" className="muted">Finding saved changes…</p>}
-    {notesOnly && !visibleCommits.length && !browsing && <p className="field-hint" role="status">No commits with notes found for this branch yet.</p>}
+    {notesOnly && !visibleCommits.length && !browsing && <p className="field-hint" role="status">No notes among the loaded commits.{history?.nextOffset != null ? ' Open the search box and choose Show older commits to look further back.' : ''}</p>}
   </section>;
 }
 
@@ -292,9 +305,9 @@ export function CommitNotesWorkspace({ initialCommit, syncVersion, backgroundRev
     if (shareNow) sharing.onSharing(true);
     try {
       const result = await submitFeedback(
-        () => api<Comment>('comments', { commit: conversation.commit, body: noteBody, action: actionForMode(mode) }),
-        async () => {
-          const next = await api<Conversation>(`conversation?commit=${encodeURIComponent(conversation.commit)}`);
+        () => api<SavedCommitNote>('comments', { commit: conversation.commit, body: noteBody, action: actionForMode(mode), expectedVersion: conversation.noteVersion }),
+        saved => {
+          const next = { ...conversation, note: saved.note, noteVersion: saved.noteVersion };
           setConversation(next); setNoteBody(next.note ?? '');
           setNotice('Note saved on this computer.');
           setMode('idle');
@@ -308,6 +321,7 @@ export function CommitNotesWorkspace({ initialCommit, syncVersion, backgroundRev
     finally { setBusy(false); setSharingNow(false); if (shareNow) sharing.onSharing(false); }
   }
   async function refresh(options: { announce?: boolean } = {}) {
+    if (mode !== 'idle') { setDeferredRefresh(true); return false; }
     const scroll = { left: window.scrollX, top: window.scrollY };
     setBusy(true); setError('');
     try {
@@ -317,35 +331,30 @@ export function CommitNotesWorkspace({ initialCommit, syncVersion, backgroundRev
       setSeenRevision(backgroundRevision); setDeferredRefresh(false);
       if (options.announce) setNotice('Latest updates are now shown.');
       requestAnimationFrame(() => window.scrollTo({ ...scroll, behavior: 'instant' }));
-    } catch (error) { setError(errorMessage(error)); }
+      return true;
+    } catch (error) { setError(errorMessage(error)); return false; }
     finally { setBusy(false); }
   }
   useEffect(() => { if (syncVersion > 0) setNotice(''); void refresh(); }, [syncVersion]);
   async function load(commit: string) {
+    const dirty = mode === 'edit' ? noteBody !== (conversation?.note ?? '') : mode !== 'idle' && Boolean(noteBody);
+    if (dirty && !window.confirm('Open this change and discard your unsaved note text?')) return false;
     setBusy(true); setError(''); setNotice('');
     try {
       const next = await api<Conversation>(`conversation?commit=${encodeURIComponent(commit)}`);
-      if (next.commit !== conversation?.commit) {
-        if (noteBody !== (conversation?.note ?? '') && !window.confirm('Open another change and discard your unsaved note text?')) return;
-      }
       selectedCommit.current = next.commit; setConversation(next); setNoteBody(next.note ?? '');
       setMode('idle');
       requestAnimationFrame(() => document.getElementById('change-notes-heading')?.focus());
-    } catch (error) { setError(errorMessage(error)); }
+      return true;
+    } catch (error) { setError(errorMessage(error)); return false; }
     finally { setBusy(false); }
   }
   async function showAndOpenCommit(commit: string) {
-    if (busy) return;
-    await load(commit);
-    setNotice(`Latest updates are now shown. Opened change ${commit.slice(0, 8)}.`);
+    if (busy || mode !== 'idle') return;
+    if (await load(commit)) setNotice(`Opened change ${commit.slice(0, 8)}.`);
   }
 
   function handleShowUpdates() {
-    const firstUpdated = backgroundSummary?.sampleNoteCommits[0];
-    if (firstUpdated && conversation?.commit !== firstUpdated) {
-      void showAndOpenCommit(firstUpdated);
-      return;
-    }
     void refresh({ announce: true });
   }
   async function clearNote() {
@@ -353,8 +362,8 @@ export function CommitNotesWorkspace({ initialCommit, syncVersion, backgroundRev
     if (!window.confirm('Delete this commit note text? Previous text remains in Git history.')) return;
     setBusy(true); setError('');
     try {
-      await api<Comment>('comments', { commit: conversation.commit, body: '', action: 'delete' });
-      const next = await api<Conversation>(`conversation?commit=${encodeURIComponent(conversation.commit)}`);
+      const saved = await api<SavedCommitNote>('comments', { commit: conversation.commit, body: '', action: 'delete', expectedVersion: conversation.noteVersion });
+      const next = { ...conversation, note: saved.note, noteVersion: saved.noteVersion };
       setConversation(next); setNoteBody('');
       setMode('idle');
       setNotice('Note deleted on this computer.'); onSaved();
@@ -362,13 +371,14 @@ export function CommitNotesWorkspace({ initialCommit, syncVersion, backgroundRev
     finally { setBusy(false); }
   }
   const canShowEditor = mode !== 'idle';
+  const hasNote = conversation?.noteVersion != null;
   const canSave = mode === 'append' || mode === 'add'
     ? Boolean(noteBody.trim())
     : mode === 'edit'
       ? Boolean(noteBody.trim()) && noteBody !== (conversation?.note ?? '')
       : false;
   return <>
-    <UpdatesNotice available={backgroundRevision > seenRevision || deferredRefresh} summary={backgroundSummary} editing={false} busy={busy}
+    <UpdatesNotice available={backgroundRevision > seenRevision || deferredRefresh} summary={backgroundSummary} editing={mode !== 'idle'} busy={busy}
       onShow={handleShowUpdates} onOpenCommit={commit => { void showAndOpenCommit(commit); }} />
     <ChangePicker initialCommit={initialCommit} conversation={conversation} syncVersion={syncVersion} backgroundRevision={backgroundRevision} busy={busy} onLoad={load} />
     <ErrorNotice message={error} onRetry={() => void refresh()} />
@@ -384,17 +394,18 @@ export function CommitNotesWorkspace({ initialCommit, syncVersion, backgroundRev
       <section className="card discussion" aria-label="Commit notes for this change">
         <div className="section-header"><h3>Note</h3>
           <button type="button" className="text-button" disabled={busy} onClick={() => void refresh()}>Refresh notes</button></div>
-        {!conversation.note && <div className="empty"><h3>No note yet</h3><p>Add a note for this saved change.</p></div>}
-        {conversation.note && <MarkdownPreview value={conversation.note} className="card-markdown" />}
-        {!conversation.note && <div className="form-actions"><button type="button" className="secondary-button" disabled={busy} onClick={() => {
-          setMode('add'); setNoteBody(''); requestAnimationFrame(() => document.getElementById('note-body')?.focus());
+        {!hasNote && <div className="empty"><h3>No note yet</h3><p>Add a note for this saved change.</p></div>}
+        {hasNote && !conversation.note?.trim() && <div className="empty"><h3>Empty note</h3><p>You can edit, append to, or delete this saved note.</p></div>}
+        {conversation.note?.trim() && <MarkdownPreview value={conversation.note} className="card-markdown" />}
+        {!hasNote && <div className="form-actions"><button type="button" className="secondary-button" disabled={busy || canShowEditor} onClick={() => {
+          setMode('add'); setNoteBody(''); requestAnimationFrame(() => focusMarkdownEditor('note-body'));
         }}>Add note</button></div>}
-        {conversation.note && <div className="comment-actions">
-          <button type="button" className="text-button" disabled={busy} onClick={() => {
-            setMode('edit'); setNoteBody(conversation.note ?? ''); requestAnimationFrame(() => document.getElementById('note-body')?.focus());
+        {hasNote && <div className="comment-actions">
+          <button type="button" className="text-button" disabled={busy || canShowEditor} onClick={() => {
+            setMode('edit'); setNoteBody(conversation.note ?? ''); requestAnimationFrame(() => focusMarkdownEditor('note-body'));
           }}>Edit</button>
-          <button type="button" className="text-button" disabled={busy} onClick={() => {
-            setMode('append'); setNoteBody(''); requestAnimationFrame(() => document.getElementById('note-body')?.focus());
+          <button type="button" className="text-button" disabled={busy || canShowEditor} onClick={() => {
+            setMode('append'); setNoteBody(''); requestAnimationFrame(() => focusMarkdownEditor('note-body'));
           }}>Append</button>
           <button type="button" className="text-button danger-text" disabled={busy} onClick={() => void clearNote()}>Delete</button>
         </div>}
@@ -408,8 +419,10 @@ export function CommitNotesWorkspace({ initialCommit, syncVersion, backgroundRev
         <fieldset disabled={busy}><MarkdownEditor id="note-body" value={noteBody} onChange={setNoteBody}
           label={mode === 'add' ? 'Add note text' : mode === 'append' ? 'Append note text' : 'Edit note text'}
           placeholder={mode === 'append' ? 'Write text to append to the current note' : 'Write note text for this commit'}
-          maxLength={20000} rows={6} required hint="Markdown supported: bold, italic, links, code blocks, and emoji." />
+          maxLength={mode === 'append' ? Math.max(0, MAX_COMMIT_NOTE_LENGTH - (conversation.note?.length ?? 0) - 2) : MAX_COMMIT_NOTE_LENGTH} rows={6} required
+          hint="Markdown supported. A complete commit note can contain up to 100,000 characters, including appended text." />
           <CommentSubmitActions busy={busy} sharingNow={sharingNow} canSave={canSave} remote={sharing.remote} onChooseRemote={onShare} />
+          <button type="button" className="text-button" disabled={busy} onClick={() => { setMode('idle'); setNoteBody(conversation.note ?? ''); }}>Cancel editing</button>
         </fieldset>
       </form>}
     </>}

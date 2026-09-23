@@ -11,7 +11,7 @@ import { commentMutationSchema, reviewMutationSchema, noteCountsInputSchema } fr
 import { addCommentSchema, createReviewSchema, revisionInputSchema, reviewCommentInputSchema, identifierInputSchema, commitListInputSchema, syncInputSchema } from '../core/models.js';
 
 export async function createServer(reviews: Reviews, initialCommit = 'HEAD', options: { backgroundIntervalMs?: number } = {}) {
-  const app = Fastify({ bodyLimit: 128 * 1024 });
+  const app = Fastify({ bodyLimit: 1024 * 1024 });
   const token = randomBytes(32).toString('hex');
   const synchronization = new Synchronization(reviews.repository);
   const background = new BackgroundUpdates(synchronization, options.backgroundIntervalMs);

@@ -1,5 +1,7 @@
 import type { Comment, Review } from './models.js';
 
+export const MAX_COMMIT_NOTE_LENGTH = 100000;
+
 export function isDeleted(record: { changes?: { kind: string }[] }): boolean {
   return record.changes?.some(change => change.kind === 'delete') ?? false;
 }
@@ -19,8 +21,4 @@ export function commentBody(comment: Comment): string {
 
 export function reviewTitle(review: Review): string {
   return [...(review.changes ?? [])].reverse().find(change => change.kind === 'rename')?.title ?? review.title;
-}
-
-export function plainNoteBody(comment: Comment): string {
-  return [...(comment.changes ?? [])].reverse().find(change => change.kind === 'edit')?.body ?? comment.body;
 }

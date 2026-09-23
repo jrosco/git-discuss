@@ -31,6 +31,7 @@ npm.cmd link
 git discuss serve
 git discuss serve --commit main --port 43821 --no-open
 git discuss comment "Could we simplify this?" --commit HEAD
+git discuss comment "More context for this commit." --commit HEAD --append
 git discuss review comment <review-id> "Agreed." --reply-to <comment-id>
 git discuss show --commit HEAD
 ```
@@ -49,7 +50,7 @@ If Git reports that `discuss` is not a command, run `npm.cmd link` from this pro
 - Read-only unified diffs of retained review revisions in the browser
 - One-command / one-click sync of reviews and commit notes with a configured Git remote
 - Optional receive-only background checks with draft-safe update notifications
-- Add-only reconciliation of concurrent comments and revisions, with atomic publication
+- Add-only review reconciliation and three-way plain-note reconciliation, with atomic publication
 - Commit selection, flat plain-text notes, refresh, and error handling
 - Git author identity, UTC timestamps, UUID comment IDs, and schema validation
 - Persistent notes at `refs/notes/git-discuss`
@@ -127,15 +128,15 @@ Diffs are served through the authenticated `GET /api/reviews/:id/revisions/:revi
 ### Edit or delete in the browser
 
 - Open a review and choose **Edit title**, then **Save title**. **Title history** in the sidebar shows earlier titles.
-- In **Reviews**, comments and replies have **Edit** and **Delete** actions. In **Change notes**, each note is a single entry (no replies) with the same edit/delete history controls.
-- Deleting a review comment asks for confirmation, replaces its text with **This comment was deleted**, and keeps replies in place. In **Change notes**, deleting a note does not affect other notes on that commit.
+- In **Reviews**, comments and replies have **Edit**, **Delete**, and **View history** actions. In **Change notes**, each commit has one plain-text/Markdown note with **Add note**, **Edit**, **Append**, and **Delete** actions. **Cancel editing** keeps the stored note unchanged.
+- Deleting a review comment asks for confirmation, replaces its text with **This comment was deleted**, and keeps replies in place. Deleting a commit note removes that commit's entire note; notes on other commits are unaffected. Previous note text remains in the Git notes ref's commit history.
 - **Delete review** asks for confirmation and removes the review from the list, including access to its discussion through normal navigation. Its retained deletion record is shared with the team on the next **Share & get updates**, so an older copy cannot bring it back.
 
 Changes save locally first and record the current Git author and timestamp. The local launch session can manage the repository's discussions; Git author metadata is not an ownership permission check. Saves include the version of the item that was opened, so a stale editor cannot silently overwrite an edit that has already arrived locally. If this check fails, the inline draft stays available: copy it if needed, cancel the edit, refresh the discussion, and reopen Edit using the current text.
 
-Deletion is a retained marker, not secure erasure. Original text, edit history, review replies, review revisions, and referenced code remain in Git. There is no restore/undelete action yet. Draft feedback on an externally deleted review is shown for copying when that deletion is received.
+Review deletion uses a retained marker. Plain commit-note deletion removes the note from the current notes tree and is reconciled using Git history. Neither is secure erasure: previous text remains in Git history. There is no restore/undelete UI yet. Draft feedback on an externally deleted review is shown for copying when that deletion is received.
 
-Edited/deleted records use schema version 2 with an append-only `changes` array. Existing version-1 discussions remain readable without migration. All teammates should update the application before sharing edits or deletions: older clients reject version-2 records rather than silently dropping this history. Raw JSON output (`review show`, `show`, or `git notes`) contains original text plus change records; the web UI displays the effective text, and `review list` shows the effective title.
+Edited/deleted **review** records use schema version 2 with an append-only `changes` array. `review show` contains original text plus those change records, while the web UI displays the effective text. Commit notes use plain text in this version; `show` returns that text in `note` and the blob ID in `noteVersion`. Older structured commit-note JSON is retained verbatim and displayed as note text; this branch does not automatically convert those old comment arrays into a plain-text thread. Use the same updated application version across collaborators.
 
 ### Remove a review only from this clone (CLI)
 
@@ -149,11 +150,13 @@ This existing CLI command removes the local review ref rather than recording the
 
 The existing `comment` / `show` commands and browser **Change notes** workspace remain independent commit-linked discussions. They are not automatically imported into reviews; storage is still `refs/notes/git-discuss`.
 
-In **Change notes**, **Where should we look?** lists local branches, last-downloaded team branches, and **My current saved code** (`HEAD`, including detached HEAD). The list leads with each change's description and author, with dates and short IDs as secondary details. Click a change to open its notes directly—there is no separate load step. The open change is highlighted. **Have a specific commit ID or branch?** exposes a manual input for Git users.
+In **Change notes**, **Where should we look?** searches local branches, last-downloaded team branches, and **My current saved code** (`HEAD`, including detached HEAD). Click the **Commit ID or branch name** box to browse commits or search their subject, author, or ID. Choose a suggestion to open it, or enter a ref and use **Open notes**. Both pickers support arrow keys, Enter, and Escape.
 
-Each saved change shows its note count, including non-deleted notes and excluding deleted notes. Counts update when you save or delete a note, refresh, share updates, or receive background updates, without resetting the chosen branch or older loaded pages. Review discussions are separate and are not included in these counts. If a stored note cannot be read, its count is shown as **Notes unavailable** rather than zero.
+Each commit can have one plain-text note in `refs/notes/git-discuss`. Suggestions with nonblank note text show a note icon. **Show only commits with notes** filters the currently loaded history; use **Show older commits** to search further back. Note presence updates after saves, deletes, refreshes, sharing, and background receipt. Review discussions are separate and are not included.
 
-The picker loads 50 commits at a time. **Show older changes** continues from the same resolved tip, while **Refresh list** reloads branch choices and the selected branch's latest history. Remote-tracking branches reflect the last Git fetch; browsing does not fetch or check out branches. Opening a different change asks before discarding an unsaved note. Only ancestors of the selected ref are listed, so unrelated Git notes and review metadata histories are excluded.
+The picker loads 50 commits at a time. **Show older commits** continues from the same resolved tip, while **Refresh list** reloads branch choices and the selected branch's latest history. Remote-tracking branches reflect the last Git fetch; browsing does not fetch or check out branches. Opening a change, including reopening the current one, asks before discarding an unsaved note. Refreshing or sharing defers display updates while a note form is open. Only ancestors of the selected ref are listed, so unrelated Git notes and review metadata histories are excluded.
+
+Notes are saved verbatim, including Markdown indentation and trailing spaces. The complete note is limited to 100,000 characters, including appended text. Review comments remain limited to 20,000 characters. The editor's formatting buttons obey these limits. A save returns the stored note and its version in the same response; the browser does not need a second request to acknowledge the save. API note edits/deletes must supply `expectedVersion` from the loaded conversation, and stale replacements are rejected. `git discuss comment` creates a note and refuses to overwrite an existing one; use `--append` to add text.
 
 ### Save now, share now or later
 
@@ -195,6 +198,8 @@ The local server fetches discussion refs and reconciles incoming notes, reviews,
 
 The browser checks the server's lightweight update status every five seconds. New local discussion data produces a **New feedback available → Show updates** notice. The active discussion and review list stay as loaded until you choose to show updates; commit note counts can refresh quietly. Your draft, selected commit/version, and expanded discussion details stay in place. The notice only occupies space when updates are available; no blank placeholder is reserved. Inline edit/title/version forms defer refresh until finished or canceled, including when another user edits or deletes the same content. A deleted review still offers its unsaved new-comment draft for copying when you apply the update.
 
+The notice identifies the most recent received batch: which workspace changed, how many reviews changed, and up to five review IDs / commit IDs, with explicit **Open** links. **Show updates** refreshes the current selection; it never automatically opens a different review or commit. The latest summary is kept when automatic checks are disabled, and identifies the remote it came from. It is a summary of the latest batch, not an exhaustive change-by-change audit across every unseen check. Ref-history-only changes without new note/review content do not generate a feedback notification.
+
 Network and reconciliation failures appear as a quiet **Updates paused — will retry** status, with optional details. Retries back off to a maximum of five minutes; you can also choose **Check now**. A conflict leaves local discussion refs unchanged. New comments can still be drafted, and foreground saves/sharing pause or cancel the server's current background check before writing.
 
 Background fetching and reconciliation run outside the application write lock. Publication uses a short locked atomic compare-and-swap transaction. If a CLI or another application instance changes a discussion while a background check is preparing, publication is rejected and a later check starts from the newer local data. Temporary receive refs under `refs/git-discuss/background/*` are cleaned up after handled success/failure.
@@ -213,7 +218,21 @@ Authenticated API endpoints: `GET /api/background-updates` for status, `POST /ap
 
 ### Reconciliation and failure handling
 
-Explicit Sync holds the application write lock, fetches remote discussion refs into a unique temporary namespace, and validates every snapshot before updating local discussion refs. Background receive uses the shorter publication-only lock described above. Both combine immutable comment/revision records and their append-only change histories by ID. Identical records are deduplicated, and additions from both developers are retained. Existing sequence constraints preserve parent-before-reply and revision history order; concurrent records are ordered deterministically by timestamp and UUID. Concurrent review revisions are both retained, not rebased or collapsed into one code change. Reviewers should explicitly select which revision they intend to discuss.
+Explicit Sync holds the application write lock, fetches remote discussion refs into a unique temporary namespace, and validates every snapshot before updating local discussion refs. Background receive uses the shorter publication-only lock described above. Review synchronization combines immutable comment/revision records and their append-only change histories by ID. Identical records are deduplicated, and additions from both developers are retained. Existing sequence constraints preserve parent-before-reply and revision history order; concurrent records are ordered deterministically by timestamp and UUID. Concurrent review revisions are both retained, not rebased or collapsed into one code change. Reviewers should explicitly select which revision they intend to discuss.
+
+Plain notes are reconciled **per annotated commit**, using their common notes history. Independent notes on different commits and one-sided edits/deletions are retained. Independent appends to the same existing text retain both suffixes in deterministic order. Conflicting replacements, or an edit racing with deletion of the same note, stop synchronization before publishing any local discussion ref; neither side is silently preferred. Git commit times are not used to guess a winner.
+
+To resolve a conflicting plain note using Git, stop the local application server, fetch the remote notes into a separate ref, and use Git's manual notes merge:
+
+```powershell
+git fetch origin refs/notes/git-discuss:refs/notes/git-discuss-incoming
+git notes --ref=git-discuss merge -s manual refs/notes/git-discuss-incoming
+# If Git reports a conflict, edit the files in the NOTES_MERGE_WORKTREE path it prints.
+git notes --ref=git-discuss merge --commit
+git discuss sync
+```
+
+The merge records both histories so the chosen resolution is recognized on subsequent sync. The application does not provide a raw-note conflict editor yet.
 
 Concurrent edits to the same comment or review title are both retained in its history; the final edit in the deterministic merged order is displayed. This is a consistent ordering, not a guarantee that unsynchronized clocks identify the actual last human edit. Deletion takes precedence over edits regardless of their order. A review deleted while a teammate adds feedback stays deleted, with that feedback retained in its stored history.
 
@@ -248,7 +267,7 @@ Writers hold the repository-wide application lock and publish the snapshot with 
 
 ### Commit-linked notes
 
-The original workflow attaches a JSON array of comment records to an exact commit at `refs/notes/git-discuss`. Writes append comments or append edit/deletion records to a comment's `changes` history under the same application lock, rewriting the note and retaining its previous version in notes history. Original comment fields remain immutable. Local-only notes do not guarantee retention of their annotated code after history rewriting. Sync snapshots add code-retention parent links before sharing notes. The raw note data is still readable with `git notes --ref=git-discuss show <commit>`.
+This version stores a plain-text/Markdown blob on each annotated commit at `refs/notes/git-discuss`. Add, edit, append, and delete rewrite the current notes tree under the application lock, with previous versions retained in Git's notes commit history. Note blob IDs provide optimistic edit/delete version checks. Local-only notes do not guarantee retention of their annotated code after history rewriting. Sync snapshots add code-retention parent links before sharing notes. Read the current text with `git notes --ref=git-discuss show <commit>` and its history with `git log --first-parent refs/notes/git-discuss`.
 
 ### Boundaries
 

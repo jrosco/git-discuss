@@ -27,8 +27,9 @@ program.command('show')
 
 program.command('comment <message>')
   .option('--commit <ref>', 'Commit to comment on', 'HEAD')
+  .option('--append', 'Append to an existing commit note instead of creating a new note')
   .action(async (body, options) => {
-    const comment = await (await reviews()).addComment({ commit: options.commit, body });
+    const comment = await (await reviews()).addComment({ commit: options.commit, body, action: options.append ? 'append' : 'add' });
     console.log(`Saved locally: ${comment.id}`);
   });
 

@@ -16,15 +16,15 @@ export class BackgroundUpdates {
       revision: 0, latestChangeSummary: null, lastCheckedAt: null, lastSuccessAt: null, nextCheckAt: null, error: null };
   }
 
-  private summarize(updatedRefs: string[], updatedReviewIds: string[] = [],
-    updatedNoteCommits: string[] = [], noteOverwriteCommits: string[] = []) {
+  private summarize(remote: string, updatedRefs: string[], updatedReviewIds: string[] = [],
+    updatedNoteCommits?: string[]) {
     const notesRef = 'refs/notes/git-discuss';
     return {
-      notesUpdated: updatedRefs.includes(notesRef),
+      remote,
+      notesUpdated: updatedNoteCommits === undefined ? updatedRefs.includes(notesRef) : updatedNoteCommits.length > 0,
       reviewsUpdated: updatedReviewIds.length,
       sampleReviewIds: updatedReviewIds.slice(0, 5),
-      sampleNoteCommits: updatedNoteCommits.slice(0, 5),
-      noteOverwriteCommits: noteOverwriteCommits.slice(0, 5),
+      sampleNoteCommits: updatedNoteCommits?.slice(0, 5) ?? [],
     };
   }
 
@@ -59,7 +59,7 @@ export class BackgroundUpdates {
     await this.cancelRun();
     if (this.closed) throw new Error('The local server is closing.');
     this.state.enabled = parsed.enabled; this.state.remote = parsed.remote;
-    this.state.error = null; this.state.lastCheckedAt = null; this.state.lastSuccessAt = null; this.state.latestChangeSummary = null; this.failures = 0;
+    this.state.error = null; this.state.lastCheckedAt = null; this.state.lastSuccessAt = null; this.failures = 0;
     this.schedule(0);
     return this.status();
   }
@@ -74,9 +74,10 @@ export class BackgroundUpdates {
     this.active = (async () => {
       try {
         const result = await this.synchronization.receive({ remote }, controller.signal);
-        if (result.updatedRefs.length) {
-          this.state.latestChangeSummary = this.summarize(result.updatedRefs,
-            result.updatedReviewIds ?? [], result.updatedNoteCommits ?? [], result.noteOverwriteCommits ?? []);
+        const hasDetails = result.updatedReviewIds !== undefined && result.updatedNoteCommits !== undefined;
+        if (result.updatedRefs.length && (!hasDetails || result.updatedReviewIds!.length + result.updatedNoteCommits!.length > 0)) {
+          this.state.latestChangeSummary = this.summarize(remote, result.updatedRefs,
+            result.updatedReviewIds ?? result.updatedRefs.filter(ref => ref.startsWith('refs/git-discuss/reviews/')).map(ref => ref.slice('refs/git-discuss/reviews/'.length)), result.updatedNoteCommits);
           this.state.revision++;
         }
         this.state.lastSuccessAt = new Date().toISOString(); this.state.error = null; this.failures = 0;

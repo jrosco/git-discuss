@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import type { BackgroundUpdateStatus, BranchChoice, Comment, Review, RevisionDiff, SyncResult } from '../core/models.js';
 import { api, errorMessage } from './api.js';
 import { CodeSource, CommentSubmitActions, ErrorNotice, SavedButUnshared, SavedNotice, Thread, UpdatesNotice, useEditingGuard } from './components.js';
-import { MarkdownEditor, MarkdownPreview } from './markdown.js';
+import { MarkdownEditor, MarkdownPreview, focusMarkdownEditor } from './markdown.js';
 import { submitFeedback, type ComposerSharing } from './submission.js';
 import { commentBody, isDeleted, recordVersion, reviewTitle } from '../core/changes.js';
 
@@ -153,7 +153,7 @@ export function ReviewsWorkspace({ syncVersion, backgroundRevision, backgroundSu
   useEffect(() => { if (syncVersion > 0) setNotice(''); void refresh(); }, [syncVersion]);
 
   async function openReview(id: string) {
-    if (id !== review?.id && body && !window.confirm('Open another review and discard your unsaved feedback?')) return;
+    if (id !== review?.id && body && !window.confirm('Open another review and discard your unsaved feedback?')) return false;
     setBusy(true); setError(''); setNotice('');
     try {
       const next = await api<Review>(`reviews/${id}`);
@@ -161,22 +161,16 @@ export function ReviewsWorkspace({ syncVersion, backgroundRevision, backgroundSu
         setRevisionId(next.revisions[next.revisions.length - 1].id); setBody(''); setReplyTo(null); setTab('discussion');
       }
       remember(next); setView('review'); setAddingVersion(false); setEditingTitle(false);
-    } catch (error) { setError(errorMessage(error)); }
+      return true;
+    } catch (error) { setError(errorMessage(error)); return false; }
     finally { setBusy(false); }
   }
   async function showAndOpenReview(id: string) {
     if (hasEdits || busy) return;
-    await refresh();
-    await openReview(id);
-    setNotice(`Latest updates are now shown. Opened review ${id.slice(0, 8)}.`);
+    if (await openReview(id)) setNotice(`Opened review ${id.slice(0, 8)}.`);
   }
 
   function handleShowUpdates() {
-    const firstUpdated = backgroundSummary?.sampleReviewIds[0];
-    if (firstUpdated && (review?.id !== firstUpdated || view !== 'review')) {
-      void showAndOpenReview(firstUpdated);
-      return;
-    }
     void refresh({ announce: true });
   }
   function chooseVersion(id: string) {
@@ -290,7 +284,7 @@ export function ReviewsWorkspace({ syncVersion, backgroundRevision, backgroundSu
         } finally { setBusy(false); }
       }} />}
       <div id="review-changes" hidden={tab !== 'changes'}>{version && <DiffViewer key={`${review.id}/${revisionId}`} reviewId={review.id} revisionId={revisionId} />}
-        <button type="button" className="secondary-button" onClick={() => { setTab('discussion'); requestAnimationFrame(() => document.getElementById('review-body')?.focus()); }}>Discuss these changes →</button>
+        <button type="button" className="secondary-button" onClick={() => { setTab('discussion'); requestAnimationFrame(() => focusMarkdownEditor('review-body')); }}>Discuss these changes →</button>
       </div>
       <div id="review-discussion" hidden={tab !== 'discussion'}>
         <section className="discussion review-timeline" aria-label="Review discussion">
@@ -306,7 +300,7 @@ export function ReviewsWorkspace({ syncVersion, backgroundRevision, backgroundSu
                 setNotice(mutation.kind === 'delete' ? 'Comment deleted on this computer.' : 'Comment updated on this computer.'); onSaved();
               } finally { setBusy(false); }
             }}
-            onReply={item => { setReplyTo(item); document.getElementById('review-body')?.focus(); }} />)}
+            onReply={item => { setReplyTo(item); focusMarkdownEditor('review-body'); }} />)}
         </section>
         <SavedButUnshared error={shareError} onShare={onShare} />
         <form className="card composer" onSubmit={event => {

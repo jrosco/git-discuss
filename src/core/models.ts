@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { MAX_COMMIT_NOTE_LENGTH } from './changes.js';
 
 const changeMetadata = {
   id: z.uuid(), author: z.object({ name: z.string().min(1), email: z.string().min(1) }), createdAt: z.iso.datetime(),
@@ -27,8 +28,9 @@ export const commentSchema = z.object({
 
 export const addCommentSchema = z.object({
   commit: z.string().min(1).max(256),
-  body: z.string().max(20000).default(''),
+  body: z.string().max(MAX_COMMIT_NOTE_LENGTH).default(''),
   action: z.enum(['set', 'add', 'edit', 'append', 'delete']).default('set'),
+  expectedVersion: z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/).nullable().optional(),
 }).strict();
 
 export type Comment = z.infer<typeof commentSchema>;
@@ -38,12 +40,18 @@ export interface Conversation {
   subject: string;
   comments: Comment[];
   note: string | null;
+  noteVersion: string | null;
 }
 
-export const commitNoteInputSchema = z.object({
-  commit: z.string().min(1).max(256),
-  note: z.string().max(20000).nullable(),
-});
+export interface SavedCommitNote {
+  id: string;
+  commit: string;
+  author: Comment['author'];
+  createdAt: string;
+  body: string;
+  note: string | null;
+  noteVersion: string | null;
+}
 
 const commitId = z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/);
 export const revisionSchema = z.object({
@@ -132,7 +140,6 @@ export interface SyncResult {
   merged: number;
   uploaded: number;
   unchanged: number;
-  noteOverwriteCommits?: string[];
 }
 
 export interface ReceiveResult {
@@ -140,7 +147,6 @@ export interface ReceiveResult {
   updatedRefs: string[];
   updatedReviewIds?: string[];
   updatedNoteCommits?: string[];
-  noteOverwriteCommits?: string[];
 }
 
 export const backgroundUpdatesInputSchema = z.object({
@@ -155,11 +161,11 @@ export interface BackgroundUpdateStatus {
   intervalSeconds: number;
   revision: number;
   latestChangeSummary: {
+    remote: string;
     notesUpdated: boolean;
     reviewsUpdated: number;
     sampleReviewIds: string[];
     sampleNoteCommits: string[];
-    noteOverwriteCommits: string[];
   } | null;
   lastCheckedAt: string | null;
   lastSuccessAt: string | null;
