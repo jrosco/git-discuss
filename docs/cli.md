@@ -11,7 +11,10 @@ git discuss show --commit HEAD
 git discuss comment "Could we simplify this?" --commit HEAD
 git discuss comment "More context." --commit HEAD --append
 git discuss sync
+git discuss sync --remote team
 ```
+
+Without `--remote`, sync uses `git-discuss.remote` from the repository’s Git config, then falls back to `origin` (or the first configured remote).
 
 `serve` starts the local browser interface. It binds only to `127.0.0.1`, selects an available port by default, and opens the browser. Use the complete URL printed by the CLI, including its authentication fragment. Stop the server with Ctrl+C.
 

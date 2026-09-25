@@ -11,8 +11,8 @@ export class BackgroundUpdates {
   private failures = 0;
   private state: BackgroundUpdateStatus;
 
-  constructor(private readonly synchronization: Synchronization, private readonly intervalMs = 60000) {
-    this.state = { enabled: false, remote: null, running: false, paused: false, intervalSeconds: intervalMs / 1000,
+  constructor(private readonly synchronization: Synchronization, private readonly intervalMs = 60000, initialRemote: string | null = null) {
+    this.state = { enabled: false, remote: initialRemote, running: false, paused: false, intervalSeconds: intervalMs / 1000,
       revision: 0, latestChangeSummary: null, lastCheckedAt: null, lastSuccessAt: null, nextCheckAt: null, error: null };
   }
 
@@ -67,11 +67,15 @@ export class BackgroundUpdates {
     this.clearTimer();
   }
 
-  async configure(input: { enabled: boolean; remote: string }): Promise<BackgroundUpdateStatus> {
+  async configure(input: { enabled: boolean; remote: string }, persist = true): Promise<BackgroundUpdateStatus> {
     const parsed = backgroundUpdatesInputSchema.parse(input);
     if (this.closed) throw new Error('The local server is closing.');
     if (parsed.enabled && (parsed.remote.startsWith('-') || !(await this.synchronization.repository.remotes()).includes(parsed.remote))) {
       throw new Error('Choose a configured Git remote for automatic updates.');
+    }
+    if (persist) {
+      await this.synchronization.repository.setDiscussRemote(parsed.remote);
+      await this.synchronization.repository.setDiscussUpdatesEnabled(parsed.enabled);
     }
     await this.cancelRun();
     if (this.closed) throw new Error('The local server is closing.');

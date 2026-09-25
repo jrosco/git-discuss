@@ -14,7 +14,11 @@ export async function createServer(reviews: Reviews, initialCommit = 'HEAD', opt
   const app = Fastify({ bodyLimit: 1024 * 1024 });
   const token = randomBytes(32).toString('hex');
   const synchronization = new Synchronization(reviews.repository);
-  const background = new BackgroundUpdates(synchronization, options.backgroundIntervalMs);
+  const defaultRemote = await reviews.repository.discussRemote();
+  const background = new BackgroundUpdates(synchronization, options.backgroundIntervalMs, defaultRemote);
+  if (await reviews.repository.discussUpdatesEnabled()) {
+    await background.configure({ enabled: true, remote: defaultRemote }, false);
+  }
   app.addHook('onClose', async () => { await background.close(); });
 
   app.addHook('onRequest', async (request, reply) => {
@@ -44,6 +48,14 @@ export async function createServer(reviews: Reviews, initialCommit = 'HEAD', opt
     currentBranch: await reviews.repository.git('branch', '--show-current') || null,
   }));
   app.get('/api/remotes', async () => reviews.repository.remotes());
+  app.post('/api/settings/remote', async request => {
+    const { remote } = z.object({ remote: z.string().min(1).max(256) }).parse(request.body);
+    if (remote.startsWith('-') || !(await reviews.repository.remotes()).includes(remote)) {
+      throw new Error('Choose a configured Git remote.');
+    }
+    await reviews.repository.setDiscussRemote(remote);
+    return { remote };
+  });
   app.post('/api/sync', async request => {
     const input = syncInputSchema.parse(request.body);
     return background.withForeground(() => synchronization.sync(input));

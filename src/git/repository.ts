@@ -82,6 +82,40 @@ export class Repository {
     return output ? output.split('\n') : [];
   }
 
+  async discussRemote(): Promise<string> {
+    const configured = await this.getConfig('git-discuss.remote');
+    if (configured !== null) return configured;
+    const remotes = await this.remotes();
+    return remotes.includes('origin') ? 'origin' : remotes[0] ?? 'origin';
+  }
+
+  async setDiscussRemote(remote: string): Promise<void> {
+    await this.git('config', '--local', 'git-discuss.remote', remote);
+  }
+
+  async discussUpdatesEnabled(): Promise<boolean> {
+    const value = await this.getConfig('git-discuss.updates.enabled');
+    if (value === null) return false;
+    if (/^(?:true|yes|on|1)$/i.test(value)) return true;
+    if (/^(?:false|no|off|0)$/i.test(value)) return false;
+    throw new Error('Invalid git-discuss.updates.enabled value. Set it to true or false.');
+  }
+
+  async setDiscussUpdatesEnabled(enabled: boolean): Promise<void> {
+    await this.git('config', '--local', 'git-discuss.updates.enabled', String(enabled));
+  }
+
+  private async getConfig(key: string): Promise<string | null> {
+    try {
+      const { stdout } = await execute('git', ['-C', this.root, 'config', '--get', key], { encoding: 'utf8' });
+      return stdout.trim();
+    } catch (error) {
+      const detail = error as Error & { code?: number; stderr?: string };
+      if (detail.code === 1) return null;
+      throw new Error(detail.stderr?.trim() || detail.message);
+    }
+  }
+
   async resolve(ref: string): Promise<string> {
     try {
       return await this.git('rev-parse', '--verify', '--end-of-options', `${ref}^{commit}`);
