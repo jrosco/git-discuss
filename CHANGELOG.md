@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.3.1](https://github.com/jrosco/git-discuss/compare/v0.3.0...v0.3.1) (2026-09-25)
+
+
+### Bug Fixes
+
+* **ci:** publish installer checksums ([24405d1](https://github.com/jrosco/git-discuss/commit/24405d13a3bf96db9d7c39a13801d2eb85f6cb60))
+* **ci:** publish installer checksums ([ca0760b](https://github.com/jrosco/git-discuss/commit/ca0760b877afc48e2aa4fe1c20863f30e107c7ea))
+
 ## [0.3.0](https://github.com/jrosco/git-discuss/compare/v0.2.0...v0.3.0) (2026-09-25)
 
 
