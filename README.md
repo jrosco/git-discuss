@@ -38,10 +38,17 @@ npm.cmd run desktop:pack
 npm.cmd run desktop:dist
 ```
 
-Desktop packages target Windows (NSIS installer), macOS (DMG), and Linux (AppImage and DEB). Build each platform's installer on that platform, or use a CI build matrix. Git must be installed and available on `PATH`; the app bundles its Node runtime, so end users do not need to install Node.js separately. Desktop builds require Rust plus Tauri's platform prerequisites: MSVC build tools on Windows, Xcode Command Line Tools on macOS, and WebKitGTK/GTK development packages on Linux. Bundle artifacts are written under `src-tauri/target/release/bundle/`.
+Desktop packages target Windows (NSIS installer), macOS (DMG), and Linux (AppImage and DEB). Build each platform's installer on that platform, or use a CI build matrix. Git must be installed and available on `PATH`; the app bundles its Node runtime, so end users do not need to install Node.js separately. The Windows installer adds the bundled `git-discuss` command to the current user's `PATH` (open a new terminal after installation), and the Debian package registers it in `/usr/bin`. For macOS, add the bundled command to a user bin directory:
+
+```sh
+mkdir -p "$HOME/.local/bin"
+ln -s "/Applications/Git Discuss.app/Contents/Resources/resources/bin/git-discuss" "$HOME/.local/bin/git-discuss"
+```
+
+Ensure `$HOME/.local/bin` is on your `PATH`. The AppImage includes the CLI wrapper in its resources; using it from `PATH` requires extracting the AppImage first. Desktop builds require Rust plus Tauri's platform prerequisites: MSVC build tools on Windows, Xcode Command Line Tools on macOS, and WebKitGTK/GTK development packages on Linux. Bundle artifacts are written under `src-tauri/target/release/bundle/`.
 
 ```powershell
-# Optional: register the git-discuss executable on your PATH
+# Optional: register the CLI from this source checkout on your PATH
 npm.cmd link
 
 # Run inside a repository, or supply --repo

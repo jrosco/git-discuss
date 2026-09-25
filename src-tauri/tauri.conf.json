@@ -18,6 +18,6 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "resources": ["resources/app/**/*", "resources/runtime/**/*"]
+    "resources": ["resources/app/**/*", "resources/runtime/**/*", "resources/bin/**/*"]
   }
 }

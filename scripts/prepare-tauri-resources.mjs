@@ -1,4 +1,4 @@
-import { cp, mkdir, rm, stat } from 'node:fs/promises';
+import { chmod, cp, mkdir, rm, stat } from 'node:fs/promises';
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -7,6 +7,7 @@ const root = fileURLToPath(new URL('../', import.meta.url));
 const resources = path.join(root, 'src-tauri', 'resources');
 const app = path.join(resources, 'app');
 const runtime = path.join(resources, 'runtime');
+const bin = path.join(resources, 'bin');
 const nodeVersion = process.versions.node.split('.').map(Number);
 
 if (nodeVersion[0] < 22 || (nodeVersion[0] === 22 && nodeVersion[1] < 12)) {
@@ -16,6 +17,7 @@ if (nodeVersion[0] < 22 || (nodeVersion[0] === 22 && nodeVersion[1] < 12)) {
 await rm(resources, { recursive: true, force: true });
 await mkdir(path.join(app, 'dist'), { recursive: true });
 await mkdir(runtime, { recursive: true });
+await mkdir(bin, { recursive: true });
 
 await cp(path.join(root, 'dist', 'cli.js'), path.join(app, 'dist', 'cli.js'));
 for (const directory of ['core', 'git', 'server']) {
@@ -27,6 +29,15 @@ for (const directory of ['core', 'git', 'server']) {
 await cp(path.join(root, 'dist', 'web'), path.join(app, 'dist', 'web'), { recursive: true });
 await cp(path.join(root, 'package.json'), path.join(app, 'package.json'));
 await cp(path.join(root, 'package-lock.json'), path.join(app, 'package-lock.json'));
+if (process.platform === 'win32') {
+  await cp(path.join(root, 'src-tauri', 'cli', 'git-discuss.cmd'), path.join(bin, 'git-discuss.cmd'));
+} else {
+  const unixCommand = path.join(bin, 'git-discuss');
+  await cp(path.join(root, 'src-tauri', 'cli', 'git-discuss'), unixCommand);
+  await chmod(unixCommand, 0o755);
+  await chmod(path.join(root, 'src-tauri', 'debian', 'post-install.sh'), 0o755);
+  await chmod(path.join(root, 'src-tauri', 'debian', 'pre-remove.sh'), 0o755);
+}
 
 const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
 const install = spawnSync(npm, ['ci', '--omit=dev', '--ignore-scripts', '--no-audit', '--no-fund'], {

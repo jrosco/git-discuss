@@ -3,7 +3,8 @@
     "targets": ["nsis"],
     "windows": {
       "nsis": {
-        "languages": ["English"]
+        "languages": ["English"],
+        "installerHooks": "windows-hooks.nsh"
       }
     }
   }
