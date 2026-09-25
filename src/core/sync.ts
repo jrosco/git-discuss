@@ -175,7 +175,8 @@ export class Synchronization {
   }
 
   async receive(input: { remote?: string } = {}, signal?: AbortSignal): Promise<ReceiveResult> {
-    const { remote } = syncInputSchema.parse(input);
+    const { remote: requestedRemote } = syncInputSchema.parse(input);
+    const remote = requestedRemote ?? await this.repository.discussRemote();
     signal?.throwIfAborted();
     if (remote.startsWith('-') || !(await this.repository.remotes()).includes(remote)) {
       throw new Error(`Remote "${remote}" is not configured. Refresh connections and choose a configured remote.`);
@@ -252,7 +253,8 @@ export class Synchronization {
   }
 
   async sync(input: { remote?: string } = {}): Promise<SyncResult> {
-    const { remote } = syncInputSchema.parse(input);
+    const { remote: requestedRemote } = syncInputSchema.parse(input);
+    const remote = requestedRemote ?? await this.repository.discussRemote();
     if (remote.startsWith('-') || !(await this.repository.remotes()).includes(remote)) {
       throw new Error(`Remote "${remote}" is not configured. Add it with git remote add, then retry.`);
     }

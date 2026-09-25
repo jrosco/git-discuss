@@ -14,7 +14,7 @@ async function until(condition: () => boolean) {
 }
 
 function fake(receive: (input: { remote?: string }, signal?: AbortSignal) => Promise<ReceiveResult>) {
-  return { repository: { remotes: async () => ['origin'] }, receive } as unknown as Synchronization;
+  return { repository: { remotes: async () => ['origin'], setDiscussRemote: async () => {}, setDiscussUpdatesEnabled: async () => {} }, receive } as unknown as Synchronization;
 }
 
 test('metadata-only ref updates do not advertise nonexistent feedback changes', async t => {
