@@ -8,5 +8,5 @@
     "rootDir": "src",
     "sourceMap": true
   },
-  "include": ["src/cli.ts", "src/desktop.ts", "src/core/**/*.ts", "src/git/**/*.ts", "src/server/**/*.ts"]
+  "include": ["src/cli.ts", "src/core/**/*.ts", "src/git/**/*.ts", "src/server/**/*.ts"]
 }

@@ -4,7 +4,7 @@ A TypeScript foundation for Git-native review conversations. The working CLI nam
 
 ## Requirements
 
-- Node.js 22.12+ and npm
+- Node.js 22.12+ and npm (for source builds; desktop installers bundle Node.js)
 - Git on PATH
 - An existing Git working tree with at least one commit
 - Git `user.name` and `user.email` configured to post comments
@@ -25,20 +25,20 @@ The server binds only to `127.0.0.1`, picks an available port, and opens your br
 
 ## Desktop app
 
-The desktop version adds a system-tray menu for opening Git Discuss, choosing repositories, switching between running repositories, and quitting. Multiple different repositories can stay open at once, with one local server per repository; reopening a running repository reuses its server. Use **Running repositories** to open one in the browser and **Close repository** to stop an individual server. The last-used repository starts automatically on launch; other recent repositories are available on demand. All servers stop when you quit, while up to eight repository paths are remembered. The web interface continues to open in your default browser.
+The desktop version uses a lightweight Tauri tray host and the operating system's webview runtime instead of bundling Chromium. It adds a system-tray menu for opening Git Discuss, choosing repositories, switching between running repositories, and quitting. Multiple different repositories can stay open at once, with one local Node server per repository; reopening a running repository reuses its server. Use **Running repositories** to open one in the browser and **Close repository** to stop an individual server. The last-used repository starts automatically on launch; other recent repositories are available on demand. All servers stop when you quit, while up to eight repository paths are remembered. The web interface continues to open in your default browser.
 
 ```powershell
 # Run the desktop app from this checkout
 npm.cmd run desktop:dev
 
-# Create an unpacked desktop app for the current platform
+# Compile the Tauri desktop app without creating an installer
 npm.cmd run desktop:pack
 
 # Create platform installer(s) for the current build host
 npm.cmd run desktop:dist
 ```
 
-Desktop packages target Windows (NSIS installer), macOS (DMG), and Linux (AppImage and DEB). Build each platform's installer on that platform, or use a CI build matrix. Git must be installed and available on `PATH`; end users do not need to install Node.js separately.
+Desktop packages target Windows (NSIS installer), macOS (DMG), and Linux (AppImage and DEB). Build each platform's installer on that platform, or use a CI build matrix. Git must be installed and available on `PATH`; the app bundles its Node runtime, so end users do not need to install Node.js separately. Desktop builds require Rust plus Tauri's platform prerequisites: MSVC build tools on Windows, Xcode Command Line Tools on macOS, and WebKitGTK/GTK development packages on Linux. Bundle artifacts are written under `src-tauri/target/release/bundle/`.
 
 ```powershell
 # Optional: register the git-discuss executable on your PATH

@@ -4,7 +4,6 @@
   "private": true,
   "description": "Local-first Git-backed review conversations",
   "type": "module",
-  "main": "dist/desktop.js",
   "bin": {
     "git-discuss": "dist/cli.js"
   },
@@ -16,15 +15,16 @@
     "node": ">=22.12.0"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.server.json && vite build",
+    "build": "tsc -p tsconfig.server.json && vite build && node scripts/build-tray-icon.mjs",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.server.json --noEmit",
     "test": "tsx --test tests/*.test.ts",
     "test:smoke": "node --test tests/built.smoke.mjs",
     "cli": "tsx src/cli.ts",
     "start": "node dist/cli.js serve",
-    "desktop:dev": "npm run build && electron .",
-    "desktop:pack": "npm run build && electron-builder --dir",
-    "desktop:dist": "npm run build && electron-builder"
+    "desktop:prepare": "npm run build && tauri icon assets/icon.svg --output src-tauri/icons && node scripts/prepare-tauri-resources.mjs",
+    "desktop:dev": "npm run desktop:prepare && tauri dev",
+    "desktop:pack": "npm run desktop:prepare && tauri build --no-bundle",
+    "desktop:dist": "npm run desktop:prepare && tauri build"
   },
   "dependencies": {
     "@fastify/static": "^10.1.4",
@@ -36,7 +36,6 @@
     "react-markdown": "10.1.0",
     "rehype-sanitize": "6.0.0",
     "remark-gfm": "4.0.1",
-    "sharp": "^0.34.5",
     "zod": "^4.1.0"
   },
   "devDependencies": {
@@ -44,29 +43,10 @@
     "@types/react": "^19.1.0",
     "@types/react-dom": "^19.1.0",
     "@vitejs/plugin-react": "^5.0.0",
-    "electron": "^38.0.0",
-    "electron-builder": "^26.0.12",
+    "@tauri-apps/cli": "^2.8.4",
+    "sharp": "^0.34.5",
     "tsx": "^4.20.0",
     "typescript": "^5.9.0",
     "vite": "^7.1.0"
-  },
-  "build": {
-    "appId": "com.gitdiscuss.desktop",
-    "productName": "Git Discuss",
-    "files": [
-      "dist/**/*",
-      "package.json",
-      "assets/icon.svg"
-    ],
-    "win": {
-      "target": ["nsis"]
-    },
-    "mac": {
-      "target": ["dmg"]
-    },
-    "linux": {
-      "target": ["AppImage", "deb"],
-      "category": "Development"
-    }
   }
 }
