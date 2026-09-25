@@ -38,6 +38,10 @@ function App() {
     try { sessionStorage.setItem(workspaceStorageKey, workspace); } catch { /* Keep navigation usable without storage. */ }
   }, [workspace]);
   const [repository, setRepository] = useState<RepositoryInfo | null>(null);
+  useEffect(() => {
+    const projectName = repository?.root.replace(/[\\/]$/, '').split(/[\\/]/).pop();
+    document.title = projectName ? `${projectName} — Git Discuss` : 'Git Discuss';
+  }, [repository?.root]);
   const [error, setError] = useState('');
   const [syncing, setSyncing] = useState(false);
   const [syncVersion, setSyncVersion] = useState(0);

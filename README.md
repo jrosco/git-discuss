@@ -23,6 +23,23 @@ On Windows, `npm.cmd` avoids PowerShell execution-policy restrictions on `npm.ps
 
 The server binds only to `127.0.0.1`, picks an available port, and opens your browser. Use the complete printed URL, including its authentication fragment. Stop it with Ctrl+C.
 
+## Desktop app
+
+The desktop version adds a system-tray menu for opening Git Discuss, choosing repositories, switching between running repositories, and quitting. Multiple different repositories can stay open at once, with one local server per repository; reopening a running repository reuses its server. Use **Running repositories** to open one in the browser and **Close repository** to stop an individual server. The last-used repository starts automatically on launch; other recent repositories are available on demand. All servers stop when you quit, while up to eight repository paths are remembered. The web interface continues to open in your default browser.
+
+```powershell
+# Run the desktop app from this checkout
+npm.cmd run desktop:dev
+
+# Create an unpacked desktop app for the current platform
+npm.cmd run desktop:pack
+
+# Create platform installer(s) for the current build host
+npm.cmd run desktop:dist
+```
+
+Desktop packages target Windows (NSIS installer), macOS (DMG), and Linux (AppImage and DEB). Build each platform's installer on that platform, or use a CI build matrix. Git must be installed and available on `PATH`; end users do not need to install Node.js separately.
+
 ```powershell
 # Optional: register the git-discuss executable on your PATH
 npm.cmd link
