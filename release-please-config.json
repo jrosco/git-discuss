@@ -5,7 +5,7 @@
   "packages": {
     ".": {
       "release-type": "node",
-      "package-name": "git-review-app",
+      "package-name": "git-discuss",
       "changelog-path": "CHANGELOG.md"
     }
   }

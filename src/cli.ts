@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { Command, InvalidArgumentError } from 'commander';
 import open from 'open';
-import { access } from 'node:fs/promises';
+import { access, readFile } from 'node:fs/promises';
 import { Repository } from './git/repository.js';
 import { Reviews } from './core/reviews.js';
 import { createServer } from './server/app.js';
@@ -9,10 +9,12 @@ import { shortIdentifier } from './core/identifiers.js';
 import { Synchronization } from './core/sync.js';
 import { reviewTitle } from './core/changes.js';
 
+const { version } = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8')) as { version: string };
+
 const program = new Command()
   .name('git discuss')
   .description('Local-first Git-backed commit discussions')
-  .version('0.2.0')
+  .version(version)
   .option('--repo <path>', 'Git working tree', process.cwd());
 
 async function reviews() {

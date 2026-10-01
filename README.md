@@ -17,6 +17,14 @@ You need Git, a repository with at least one commit, and a configured Git author
 
 With the desktop app, open Git Discuss from the system tray and choose a repository. The web interface opens in your default browser; multiple repositories can stay open at once.
 
+To install the command-line package globally (separate from the desktop app), install Node.js 22.12 or newer and run:
+
+```sh
+npm install --global git-discuss
+```
+
+Then run `git discuss` commands from a Git repository. The npm package installs the CLI and browser interface; it does not install the desktop tray app.
+
 To run from a source checkout:
 
 ```sh
@@ -32,7 +40,7 @@ git discuss serve
 git discuss sync
 ```
 
-The desktop installer bundles the CLI command. Windows and Debian installers add it to `PATH`; see the [desktop guide](docs/desktop.md) for macOS and AppImage setup. See the [CLI guide](docs/cli.md) for source-checkout use.
+The desktop installer also bundles the CLI command. Windows and Debian installers add it to `PATH`; see the [desktop guide](docs/desktop.md) for macOS and AppImage setup. See the [CLI guide](docs/cli.md) for npm installation and command usage.
 
 ## Guides
 

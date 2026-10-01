@@ -1,6 +1,12 @@
 # Command-line reference
 
-The desktop installer provides the `git-discuss` executable. From a source checkout, run `npm run build` and either use `node dist/cli.js` or register the executable with `npm link`. On Windows PowerShell, `npm.cmd link` avoids execution-policy issues.
+Install the CLI globally from npm (Node.js 22.12 or newer is required):
+
+```sh
+npm install --global git-discuss
+```
+
+This installs the command-line package and browser interface; the desktop tray app is distributed separately through its platform installers. From a source checkout, run `npm run build` and either use `node dist/cli.js` or register the executable with `npm link`. On Windows PowerShell, `npm.cmd link` avoids execution-policy issues.
 
 Run commands inside a Git repository, or pass `--repo <path>` before the command:
 
