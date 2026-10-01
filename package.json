@@ -1,6 +1,6 @@
 {
   "name": "git-review-app",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": true,
   "description": "Local-first Git-backed review conversations",
   "type": "module",
