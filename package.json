@@ -1,6 +1,6 @@
 {
   "name": "git-discuss",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Local-first Git-backed code reviews and commit discussions",
   "type": "module",
   "repository": {
@@ -11,7 +11,12 @@
   "bugs": {
     "url": "https://github.com/jrosco/git-discuss/issues"
   },
-  "keywords": ["git", "code-review", "cli", "developer-tools"],
+  "keywords": [
+    "git",
+    "code-review",
+    "cli",
+    "developer-tools"
+  ],
   "bin": {
     "git-discuss": "dist/cli.js"
   },

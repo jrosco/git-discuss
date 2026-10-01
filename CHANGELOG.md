@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.5.0](https://github.com/jrosco/git-discuss/compare/v0.4.0...v0.5.0) (2026-10-01)
+
+
+### Features
+
+* add npm package deploy ([e2752fe](https://github.com/jrosco/git-discuss/commit/e2752fe61262d568746e58a3ea04fc355f10d40f))
+* **cli:** prepare npm package ([0500285](https://github.com/jrosco/git-discuss/commit/0500285df3402d1aa47478ceb0dda3750c280c8f))
+
 ## [0.4.0](https://github.com/jrosco/git-discuss/compare/v0.3.0...v0.4.0) (2026-09-25)
 
 
