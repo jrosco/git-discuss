@@ -42,7 +42,7 @@
     "@types/node": "^26.6.2",
     "@types/react": "^19.1.0",
     "@types/react-dom": "^19.1.0",
-    "@vitejs/plugin-react": "^5.0.0",
+    "@vitejs/plugin-react": "^6.1.1",
     "@tauri-apps/cli": "^2.8.4",
     "sharp": "^0.35.4",
     "tsx": "^4.20.0",
