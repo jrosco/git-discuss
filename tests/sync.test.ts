@@ -46,6 +46,14 @@ test('thread resolution syncs, but concurrent offline replies reopen the thread 
   assert.deepEqual((await sa.receive()).updatedRefs, []);
 });
 
+test('git-discuss.remote selects the default sync remote', async t => {
+  const { a, sa, origin } = await fixture(t);
+  await a.repository.git('remote', 'add', 'team', origin);
+  await a.repository.setDiscussRemote('team');
+  assert.equal(await a.repository.discussRemote(), 'team');
+  assert.equal((await sa.sync()).remote, 'team');
+});
+
 test('divergent notes on different commits are both retained during sync', async t => {
   const { a, b, sa, sb } = await fixture(t);
   const first = await a.repository.resolve('HEAD');
@@ -390,6 +398,8 @@ test('background update APIs are authenticated and receive data while leaving re
   assert.equal((await fetch(`${address}/api/background-updates`, { method: 'POST', headers: { ...headers, Origin: 'https://example.test' }, body: '{}' })).status, 403);
   assert.equal((await fetch(`${address}/api/background-updates`, { method: 'POST', headers, body: '{"enabled":true,"remote":"missing"}' })).status, 400);
   assert.equal((await fetch(`${address}/api/background-updates`, { method: 'POST', headers, body: '{"enabled":true,"remote":"origin"}' })).status, 200);
+  assert.equal(await b.repository.git('config', '--get', 'git-discuss.updates.enabled'), 'true');
+  assert.equal(await b.repository.git('config', '--get', 'git-discuss.remote'), 'origin');
   const deadline = Date.now() + 15000;
   let status: { revision: number; running: boolean; error: string | null };
   do {
@@ -403,4 +413,18 @@ test('background update APIs are authenticated and receive data while leaving re
   const disabled = await fetch(`${address}/api/background-updates`, { method: 'POST', headers, body: '{"enabled":false,"remote":"origin"}' });
   assert.equal(disabled.status, 200);
   assert.equal((await disabled.json() as { nextCheckAt: null }).nextCheckAt, null);
+  assert.equal(await b.repository.git('config', '--get', 'git-discuss.updates.enabled'), 'false');
+});
+
+test('git-discuss.updates.enabled restores background checks when the server starts', async t => {
+  const { a } = await fixture(t);
+  await a.repository.setDiscussUpdatesEnabled(true);
+  const { app, token } = await createServer(a);
+  t.after(() => app.close());
+  const address = await app.listen({ host: '127.0.0.1', port: 0 });
+  const status = await (await fetch(`${address}/api/background-updates`, {
+    headers: { Authorization: `Bearer ${token}` },
+  })).json() as { enabled: boolean; remote: string | null };
+  assert.equal(status.enabled, true);
+  assert.equal(status.remote, 'origin');
 });

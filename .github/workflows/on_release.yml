@@ -81,12 +81,28 @@ jobs:
           path: release-artifacts
           merge-multiple: true
 
+      - name: Generate SHA-256 checksums
+        run: |
+          mapfile -d '' installers < <(find release-artifacts -type f \( -iname '*.appimage' -o -iname '*.deb' -o -iname '*.dmg' -o -iname '*.exe' \) -print0 | sort -z)
+          if [ "${#installers[@]}" -eq 0 ]; then
+            echo "No desktop installer artifacts were downloaded."
+            exit 1
+          fi
+
+          : > release-artifacts/SHA256SUMS.txt
+          for installer in "${installers[@]}"; do
+            name="$(basename "$installer")"
+            digest="$(sha256sum "$installer" | cut -d ' ' -f 1)"
+            printf '%s  %s\n' "$digest" "$name" > "${installer}.sha256"
+            printf '%s  %s\n' "$digest" "$name" >> release-artifacts/SHA256SUMS.txt
+          done
+
       - name: Upload installers to the release
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ inputs.tag_name || github.event.release.tag_name }}
         run: |
-          mapfile -d '' files < <(find release-artifacts -type f -print0)
+          mapfile -d '' files < <(find release-artifacts -type f \( -iname '*.appimage' -o -iname '*.deb' -o -iname '*.dmg' -o -iname '*.exe' -o -name '*.sha256' -o -name 'SHA256SUMS.txt' \) -print0)
           if [ "${#files[@]}" -eq 0 ]; then
             echo "No desktop installer artifacts were downloaded."
             exit 1

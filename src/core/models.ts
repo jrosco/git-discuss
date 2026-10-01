@@ -183,7 +183,7 @@ export interface CommitPage {
 export const noteCountsInputSchema = z.object({ commits: z.array(commitId).max(100) });
 export type NoteCounts = Record<string, number | null>;
 
-export const syncInputSchema = z.object({ remote: z.string().min(1).max(256).default('origin') });
+export const syncInputSchema = z.object({ remote: z.string().min(1).max(256).optional() });
 export interface SyncResult {
   remote: string;
   downloaded: number;

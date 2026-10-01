@@ -93,7 +93,7 @@ review.command('delete <id>').description('Delete a local review and its retaine
   });
 
 program.command('sync').description('Fetch, reconcile, and push commit notes and reviews')
-  .option('--remote <name>', 'Configured Git remote', 'origin')
+  .option('--remote <name>', 'Configured Git remote (defaults to git-discuss.remote, then origin)')
   .option('--json', 'Print sync counts as JSON')
   .action(async options => {
     const engine = await reviews();

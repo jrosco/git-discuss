@@ -80,7 +80,7 @@ export function SharingPanel({ busy, localChanges, onBusy, onFinished, onBackgro
       const [names, status] = await Promise.all([api<string[]>('remotes'), api<BackgroundUpdateStatus>('background-updates')]);
       setRemotes(names);
       showStatus(status);
-      setRemote(current => names.includes(current) ? current : status.enabled && status.remote && names.includes(status.remote) ? status.remote : names.includes('origin') ? 'origin' : names[0] ?? '');
+      setRemote(current => names.includes(current) ? current : status.remote && names.includes(status.remote) ? status.remote : names.includes('origin') ? 'origin' : names[0] ?? '');
     } catch (error) { setError(errorMessage(error)); }
     finally { setLoading(false); }
   }
@@ -110,6 +110,13 @@ export function SharingPanel({ busy, localChanges, onBusy, onFinished, onBackgro
         const next = event.target.value;
         setRemote(next); setResult(null); setLastShared(''); setError('');
         if (background?.enabled) void configureBackground(true, next);
+        else {
+          setSettingsBusy(true); setBackgroundError('');
+          void api<{ remote: string }>('settings/remote', { remote: next })
+            .then(() => { if (background) setBackground({ ...background, remote: next }); })
+            .catch(error => setBackgroundError(errorMessage(error)))
+            .finally(() => setSettingsBusy(false));
+        }
       }}>
         {!remotes.length && <option value="">{loading ? 'Finding repositories…' : 'No team repository connected'}</option>}
         {remotes.map(name => <option key={name} value={name}>{name}</option>)}
