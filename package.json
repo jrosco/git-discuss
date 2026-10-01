@@ -1,14 +1,26 @@
 {
-  "name": "git-review-app",
+  "name": "git-discuss",
   "version": "0.4.0",
-  "private": true,
-  "description": "Local-first Git-backed review conversations",
+  "description": "Local-first Git-backed code reviews and commit discussions",
   "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jrosco/git-discuss.git"
+  },
+  "homepage": "https://github.com/jrosco/git-discuss#readme",
+  "bugs": {
+    "url": "https://github.com/jrosco/git-discuss/issues"
+  },
+  "keywords": ["git", "code-review", "cli", "developer-tools"],
   "bin": {
     "git-discuss": "dist/cli.js"
   },
   "files": [
-    "dist",
+    "dist/cli.js",
+    "dist/core/",
+    "dist/git/",
+    "dist/server/",
+    "dist/web/",
     "README.md"
   ],
   "engines": {
@@ -16,6 +28,7 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.server.json && vite build && node scripts/build-tray-icon.mjs",
+    "prepack": "npm run build",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.server.json --noEmit",
     "test": "tsx --test tests/*.test.ts",
     "test:smoke": "node --test tests/built.smoke.mjs",
