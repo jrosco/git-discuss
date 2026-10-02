@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.6.0](https://github.com/jrosco/git-discuss/compare/v0.5.0...v0.6.0) (2026-10-02)
+
+
+### Features
+
+* **ui:** add branch switching ([a0634c0](https://github.com/jrosco/git-discuss/commit/a0634c076ecea0fee4b2f16bff258d5b33cc86ea))
+* **ui:** add branch switching ([8f3789e](https://github.com/jrosco/git-discuss/commit/8f3789e27965891da6c7cc3b36417745ab22c021))
+
 ## [0.5.0](https://github.com/jrosco/git-discuss/compare/v0.4.0...v0.5.0) (2026-10-01)
 
 
