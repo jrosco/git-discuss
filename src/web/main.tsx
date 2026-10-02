@@ -6,7 +6,7 @@ import { ReviewsWorkspace } from './reviews.js';
 import { CommitNotesWorkspace } from './commit-notes.js';
 import { SharingPanel } from './sharing.js';
 import './styles.css';
-import type { BackgroundUpdateStatus, SyncResult } from '../core/models.js';
+import type { BackgroundUpdateStatus, BranchChoice, SyncResult } from '../core/models.js';
 import type { ComposerSharing } from './submission.js';
 
 type Theme = 'light' | 'dark';
@@ -43,6 +43,9 @@ function App() {
     document.title = projectName ? `${projectName} — Git Discuss` : 'Git Discuss';
   }, [repository?.root]);
   const [error, setError] = useState('');
+  const [branches, setBranches] = useState<BranchChoice[]>([]);
+  const [branchError, setBranchError] = useState('');
+  const [switchingBranch, setSwitchingBranch] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [syncVersion, setSyncVersion] = useState(0);
   const [backgroundRevision, setBackgroundRevision] = useState(0);
@@ -62,8 +65,26 @@ function App() {
   };
   async function connect() {
     setError('');
-    try { setRepository(await api<RepositoryInfo>('repository')); }
+    try {
+      const [nextRepository, nextBranches] = await Promise.all([
+        api<RepositoryInfo>('repository'), api<BranchChoice[]>('branches'),
+      ]);
+      setRepository(nextRepository);
+      setBranches(nextBranches);
+    }
     catch (error) { setError(errorMessage(error)); }
+  }
+  async function switchBranch(branch: string) {
+    if (!branch || branch === repository?.currentBranch || switchingBranch) return;
+    setSwitchingBranch(true); setBranchError('');
+    try {
+      await api<{ currentBranch: string | null }>('branches/switch', { branch });
+      await connect();
+      setSyncVersion(version => version + 1);
+    } catch (error) {
+      setBranchError(errorMessage(error));
+      await connect();
+    } finally { setSwitchingBranch(false); }
   }
   useEffect(() => {
     void connect();
@@ -79,6 +100,7 @@ function App() {
     else panel?.focus({ preventScroll: true });
   }
   const projectName = repository?.root.replace(/[\\/]$/, '').split(/[\\/]/).pop();
+  const localBranches = branches.filter(branch => !branch.remote);
   return <main>
     <a className="skip-link" href="#workspace-content">Skip to reviews and notes</a>
     <header className="page-header">
@@ -98,14 +120,22 @@ function App() {
       </div>
     </header>
     <div className="project-context"><strong>{projectName || (error ? 'Project unavailable' : 'Opening your project…')}</strong>
-      {repository && <span className="branch-badge" aria-label={repository.currentBranch ? `Current branch: ${repository.currentBranch}` : 'No branch checked out: detached HEAD'}
-        title={repository.currentBranch ? `Currently checked-out branch: ${repository.currentBranch}` : 'You are viewing a specific commit rather than a branch.'}>
-        <svg aria-hidden="true" viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.4"><circle cx="4" cy="3" r="2" /><circle cx="4" cy="13" r="2" /><circle cx="12" cy="3" r="2" /><path d="M4 5v6m8-6v1a4 4 0 0 1-4 4H4" /></svg>
-        {repository.currentBranch || 'Detached HEAD'}
-      </span>}
+      {repository && <label className="branch-switcher" htmlFor="current-branch">
+        <span>Switch branch</span>
+        <select id="current-branch" aria-label="Switch branch" value={repository.currentBranch || ''}
+          title="Switch to another local branch" disabled={switchingBranch || syncing || localBranches.length === 0}
+          onChange={event => void switchBranch(event.target.value)}>
+          {!repository.currentBranch && <option value="">Detached HEAD</option>}
+          {localBranches.map(branch => <option key={branch.ref} value={branch.name}>{branch.name}</option>)}
+        </select>
+        {switchingBranch && <span role="status">Switching…</span>}
+      </label>}
+      {repository && localBranches.length === 0 && <small className="branch-switcher-help">No local branches available.</small>}
+      {repository?.currentBranch && localBranches.length === 1 && <small className="branch-switcher-help">Only one local branch available.</small>}
       {repository && <details><summary>Project location</summary><code>{repository.root}</code></details>}
     </div>
     <ErrorNotice message={error} onRetry={() => void connect()} />
+    <ErrorNotice message={branchError} />
     <div className="workspace-layout">
       <nav className="workspace-nav" aria-label="Discussion workspaces">
         <div className="sr-only">Discussion workspaces</div>

@@ -65,6 +65,11 @@ export async function createServer(reviews: Reviews, initialCommit = 'HEAD', opt
   app.post('/api/background-updates', async request => background.configure(backgroundUpdatesInputSchema.parse(request.body)));
   app.post('/api/background-updates/check', async () => background.checkNow());
   app.get('/api/branches', async () => reviews.repository.branches());
+  app.post('/api/branches/switch', async request => {
+    const { branch } = z.object({ branch: z.string().min(1).max(256) }).strict().parse(request.body);
+    await reviews.repository.switchBranch(branch);
+    return { currentBranch: await reviews.repository.git('branch', '--show-current') || null };
+  });
   app.get('/api/commits', async request => reviews.repository.commits(commitListInputSchema.parse(request.query)));
   app.post('/api/note-counts', async request => reviews.repository.noteCounts(noteCountsInputSchema.parse(request.body).commits));
   const reviewId = (params: unknown) => z.object({ id: identifierInputSchema }).parse(params).id;
