@@ -321,16 +321,26 @@ test('branch and commit browsing excludes metadata, supports stable pages, and h
 
 test('HTTP API authenticates, restricts origins, validates writes, and persists comments', async t => {
   const { directory, engine } = await fixture();
+  const originalBranch = await engine.repository.git('branch', '--show-current');
+  await engine.repository.git('branch', 'feature/switch');
   const { app, token } = await createServer(engine);
   t.after(async () => { await app.close(); await rm(directory, { recursive: true, force: true }); });
   const address = await app.listen({ host: '127.0.0.1', port: 0 });
   const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
   assert.equal((await fetch(`${address}/api/repository`)).status, 401);
   assert.equal((await fetch(`${address}/api/branches`)).status, 401);
+  assert.equal((await fetch(`${address}/api/branches/switch`, { method: 'POST', body: JSON.stringify({ branch: 'feature/switch' }) })).status, 401);
   assert.equal((await fetch(`${address}/api/commits`)).status, 401);
   const branchResponse = await fetch(`${address}/api/branches`, { headers });
   assert.equal(branchResponse.status, 200);
-  assert.equal((await branchResponse.json() as { current: boolean }[])[0].current, true);
+  assert.equal((await branchResponse.json() as { current: boolean }[]).some(branch => branch.current), true);
+  const invalidBranch = await fetch(`${address}/api/branches/switch`, { method: 'POST', headers, body: JSON.stringify({ branch: 'missing-branch' }) });
+  assert.equal(invalidBranch.status, 400);
+  const switched = await fetch(`${address}/api/branches/switch`, { method: 'POST', headers, body: JSON.stringify({ branch: 'feature/switch' }) });
+  assert.equal(switched.status, 200);
+  assert.deepEqual(await switched.json(), { currentBranch: 'feature/switch' });
+  await fetch(`${address}/api/branches/switch`, { method: 'POST', headers, body: JSON.stringify({ branch: originalBranch }) });
+  assert.equal(await engine.repository.git('branch', '--show-current'), originalBranch);
   const commitResponse = await fetch(`${address}/api/commits?ref=HEAD&limit=1`, { headers });
   assert.equal(commitResponse.status, 200);
   const commits = await commitResponse.json() as { commits: { subject: string; noteCount: number }[]; nextOffset: number | null };

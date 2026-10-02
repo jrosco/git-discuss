@@ -57,6 +57,9 @@ details p { font-size: 13px; }
 .project-context { display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap; margin: 22px 0 18px; font-size: 18px; }
 .project-context > strong { color: var(--link); font-weight: 600; }
 .project-context details { min-width: 0; }
+.branch-switcher { display: inline-flex; align-items: center; gap: 8px; margin: 0; color: var(--fg); font-size: 13px; }
+.branch-switcher select { max-width: min(320px, 60vw); padding: 6px 10px; font-size: 13px; }
+.branch-switcher-help { color: var(--muted); font-size: 11px; }
 .branch-badge { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; padding: 4px 9px; border: 1px solid var(--border); border-radius: 6px; background: var(--subtle); color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
 .branch-badge svg { flex-shrink: 0; }
 .card { border: 1px solid var(--border); border-radius: 6px; background: var(--bg); }

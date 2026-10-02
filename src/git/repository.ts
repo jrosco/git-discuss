@@ -157,6 +157,14 @@ export class Repository {
     }) : [];
   }
 
+  async switchBranch(name: string): Promise<void> {
+    await this.withWriteLock(async () => {
+      const branch = (await this.branches()).find(item => !item.remote && item.name === name);
+      if (!branch) throw new Error('Choose an existing local branch.');
+      await this.git('switch', '--', branch.name);
+    });
+  }
+
   async commits(input: { ref?: string; offset?: number; limit?: number } = {}): Promise<CommitPage> {
     const { ref, offset, limit } = commitListInputSchema.parse(input);
     const tip = await this.resolve(ref);
